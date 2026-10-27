@@ -27,6 +27,7 @@ type
     procedure TestMainMenuPositionOnResize();
     procedure TestTerminalSelectionLifecycle();
     procedure TestTerminalFontConfiguration();
+    procedure TestStatusBarInitialPosition();
   end;
 
 implementation
@@ -99,6 +100,27 @@ begin
   term.ResetZoom();
   AssertEquals('ResetZoom restores base font size', term.BaseFontSize, term.FontSize);
   AssertEquals('Font size restored to initial', initialSize, term.FontSize);
+end;
+
+procedure TConsoleWindowTest.TestStatusBarInitialPosition();
+var
+  sb, st: TFtWidget;
+begin
+  sb := FWindow.FindWidget('statusBar');
+  AssertNotNull('Status bar widget should exist', sb);
+  st := FWindow.FindWidget('statusText');
+  AssertNotNull('Status text widget should exist', st);
+
+  // Status bar should be docked to the bottom from the very start, without any manual window resize
+  AssertEquals('Status bar X is 0', 0, sb.X);
+  AssertEquals('Status bar width fills window width', FWindow.Width, sb.Width);
+  AssertEquals('Status bar bottom edge touches window bottom', FWindow.Height, sb.Y + sb.Height);
+
+  // Status text should be vertically positioned inside the status bar
+  AssertTrue('Status text Y is inside status bar: st.Y=' + IntToStr(st.Y) + ', sb.Y=' + IntToStr(sb.Y),
+    st.Y >= sb.Y);
+  AssertTrue('Status text bottom is within status bar: st.bottom=' + IntToStr(st.Y + st.Height) + ', sb.bottom=' + IntToStr(sb.Y + sb.Height),
+    (st.Y + st.Height) <= (sb.Y + sb.Height));
 end;
 
 procedure TConsoleWindowTest.TestMainMenuPositionOnResize();

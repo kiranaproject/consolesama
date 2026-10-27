@@ -127,6 +127,7 @@ begin
   GCurrentWindow := Self;
 
   SetupUI();
+  DoResize(Width, Height);
 
   // First terminal tab.
   AddTerminalTab();

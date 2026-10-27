@@ -7,8 +7,8 @@
 //
 Rectangle {
   id: root;
-  width: 960;
-  height: 640;
+  width: 980;
+  height: 660;
   color: "#171a21";
 
   MenuBar {
@@ -70,9 +70,10 @@ Rectangle {
     Text {
       id: statusText;
       anchors.left: parent.left;
+      anchors.right: statusRight.left;
       anchors.verticalCenter: parent.verticalCenter;
       anchors.leftMargin: 8;
-      width: 700;
+      anchors.rightMargin: 8;
       height: 20;
       text: "consolesama — ready";
       color: "#7f8c98";
