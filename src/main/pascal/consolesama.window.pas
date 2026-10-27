@@ -43,7 +43,6 @@ type
     procedure LayoutTabs();
     procedure UpdateStatus();
     procedure UpdateTitle();
-    function  ActiveTab(): TConsoleTab;
     procedure FocusActive();
     procedure HandleTabChange(Sender: TFtNotebook; ANewIndex, AOldIndex: Integer);
     function  HandleShortcut(Sender: TObject; AKeySym, AState: LongWord): Boolean;
@@ -71,6 +70,8 @@ type
     destructor Destroy(); override;
 
     procedure PumpTicks();
+    function  ActiveTab(): TConsoleTab;
+    function  ActiveTerminal(): TConsoleTerminalView;
     property Notebook: TFtNotebook read FNotebook;
   end;
 
@@ -224,6 +225,17 @@ function TConsoleSamaWindow.ActiveTab(): TConsoleTab;
 begin
   if (FActiveIndex >= 0) and (FActiveIndex < FTabs.Count) then
     Result := TConsoleTab(FTabs[FActiveIndex])
+  else
+    Result := nil;
+end;
+
+function TConsoleSamaWindow.ActiveTerminal(): TConsoleTerminalView;
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then
+    Result := tab.View
   else
     Result := nil;
 end;

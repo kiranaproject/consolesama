@@ -9,8 +9,9 @@ interface
 
 uses
   Classes, SysUtils, fpcunit, testregistry,
-  ftpas, ftpas.api, ftpas.types,
+  ftpas, ftpas.api, ftpas.types, ftpas.widget,
   ConsoleSama.Ftml.Res,
+  ConsoleSama.Terminal,
   ConsoleSama.Window;
 
 type
@@ -23,6 +24,8 @@ type
   published
     procedure TestWindowCreation();
     procedure TestTabManagement();
+    procedure TestMainMenuPositionOnResize();
+    procedure TestTerminalSelectionLifecycle();
   end;
 
 implementation
@@ -61,6 +64,73 @@ end;
 procedure TConsoleWindowTest.TestTabManagement();
 begin
   AssertEquals('Initial tab count', 1, FWindow.Notebook.PageCount);
+end;
+
+procedure TConsoleWindowTest.TestMainMenuPositionOnResize();
+var
+  menuW: TFtWidget;
+begin
+  menuW := FWindow.FindWidget('menuBar');
+  AssertNotNull('Menu bar widget should exist', menuW);
+  AssertEquals('Menu bar initially pinned at X=0', 0, menuW.X);
+  AssertEquals('Menu bar initially pinned at Y=0', 0, menuW.Y);
+
+  // Resize window to different dimensions and offset coordinates
+  FWindow.SetBounds(150, 120, 1024, 768);
+
+  AssertEquals('Menu bar must stay at X=0 after window resize', 0, menuW.X);
+  AssertEquals('Menu bar must stay at Y=0 after window resize', 0, menuW.Y);
+end;
+
+procedure TConsoleWindowTest.TestTerminalSelectionLifecycle();
+var
+  term: TConsoleTerminalView;
+begin
+  term := FWindow.ActiveTerminal();
+  AssertNotNull('Active terminal should exist', term);
+
+  // Initial state: no selection, not selecting
+  AssertFalse('Initially not selecting', term.Selecting);
+  AssertFalse('Initially no selection active', term.HasSelection);
+
+  // 1. Single click (mouse down and release at same coordinate):
+  // Must NOT activate selection and must NOT get stuck in selecting mode
+  term.HandleMouseDown(nil, 60, 60, 1);
+  AssertTrue('Selecting while button held down', term.Selecting);
+  AssertFalse('No selection active before drag', term.HasSelection);
+
+  term.HandleMouseUp(nil, 60, 60, 1);
+  AssertFalse('Selecting false after release', term.Selecting);
+  AssertFalse('No selection active after single click', term.HasSelection);
+
+  // 2. Hovering mouse without button held:
+  // Must NOT enter drag-select mode
+  term.HandleMouseMove(nil, 240, 60);
+  AssertFalse('Hover must not trigger selecting', term.Selecting);
+  AssertFalse('Hover must not create selection', term.HasSelection);
+
+  // 3. Drag select (mouse down, drag across columns, mouse up):
+  term.HandleMouseDown(nil, 60, 60, 1);
+  term.HandleMouseMove(nil, 240, 60);
+  AssertTrue('Selecting is true while dragging', term.Selecting);
+  AssertTrue('Selection is active while dragging', term.HasSelection);
+
+  term.HandleMouseUp(nil, 240, 60, 1);
+  AssertFalse('Selecting is false after mouse up', term.Selecting);
+  AssertTrue('Selection remains active after drag release', term.HasSelection);
+
+  // 4. Moving mouse after drag without button held:
+  // Must NOT expand or alter the selection
+  term.HandleMouseMove(nil, 400, 120);
+  AssertFalse('Hover after drag must not be selecting', term.Selecting);
+  AssertTrue('Selection stays active until cleared', term.HasSelection);
+
+  // 5. Single click clears the previous selection:
+  term.HandleMouseDown(nil, 300, 300, 1);
+  AssertFalse('New click clears previous selection', term.HasSelection);
+  term.HandleMouseUp(nil, 300, 300, 1);
+  AssertFalse('After click release, no selection', term.HasSelection);
+  AssertFalse('Not selecting', term.Selecting);
 end;
 
 initialization

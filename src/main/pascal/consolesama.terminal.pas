@@ -38,6 +38,7 @@ type
     FCellH: Double;
     FAscent: Double;
     FSelActive: Boolean;
+    FSelecting: Boolean;
     FSelStartX, FSelStartY: Integer;
     FSelEndX, FSelEndY: Integer;
     FOnTitle: TTerminalTitleEvent;
@@ -55,10 +56,6 @@ type
     procedure DrawSelection(ACanvas: TFtCanvas);
     function  PaletteColor(const AColor: TTermColor; AIsBackground: Boolean): TFtColor;
     procedure HandlePaint(Sender: TFtDrawingArea; ACanvas: TFtCanvas);
-    procedure HandleKeyDown(Sender: TFtDrawingArea; AKeySym, AState: LongWord);
-    procedure HandleMouseDown(Sender: TFtDrawingArea; AX, AY, AButton: Integer);
-    procedure HandleMouseMove(Sender: TFtDrawingArea; AX, AY: Integer);
-    procedure HandleMouseUp(Sender: TFtDrawingArea; AX, AY, AButton: Integer);
     procedure HandleWheel(Sender: TFtDrawingArea; AX, AY, ADeltaX, ADeltaY: Integer);
     procedure HandleResized(Sender: TFtDrawingArea; ANewWidth, ANewHeight: Integer);
     procedure SendInput(const AData: string);
@@ -70,10 +67,16 @@ type
       const AFontDesc: string = DefaultFontDesc); reintroduce;
     destructor Destroy(); override;
 
+    procedure HandleKeyDown(Sender: TFtDrawingArea; AKeySym, AState: LongWord);
+    procedure HandleMouseDown(Sender: TFtDrawingArea; AX, AY, AButton: Integer);
+    procedure HandleMouseMove(Sender: TFtDrawingArea; AX, AY: Integer);
+    procedure HandleMouseUp(Sender: TFtDrawingArea; AX, AY, AButton: Integer);
+
     procedure StartShell(const AShell: string = ''; const ACwd: string = '');
     procedure Pump();
     procedure CopySelection();
     procedure PasteFromClipboard();
+    procedure ClearSelection();
     procedure SelectAll();
     procedure ScrollPage(ADelta: Integer);
     procedure ScrollToEnd();
@@ -89,6 +92,8 @@ type
     property TermRows: Integer read FRows;
     property CellWidth: Double read FCellW;
     property CellHeight: Double read FCellH;
+    property HasSelection: Boolean read FSelActive;
+    property Selecting: Boolean read FSelecting;
 
     property OnTitle: TTerminalTitleEvent read FOnTitle write FOnTitle;
     property OnExit: TTerminalExitEvent read FOnExit write FOnExit;
@@ -139,6 +144,7 @@ begin
   FCols := 80;
   FRows := 24;
   FSelActive := False;
+  FSelecting := False;
   FBlinkOn := True;
   FLastPumpTick := 0;
   FLastTitle := '';
@@ -346,6 +352,7 @@ var
 begin
   if not FSelActive then Exit;
   SelectionNormalized(l1, c1, l2, c2);
+  if (l1 = l2) and (c1 = c2) then Exit;
   for row := l1 to l2 do
   begin
     if row = l1 then x1 := c1 else x1 := 0;
@@ -405,6 +412,10 @@ begin
     Exit;
   end;
 
+  // Clear any active selection upon typing
+  if FSelActive and not FSelecting then
+    FSelActive := False;
+
   // Any other key returns the view to the live bottom.
   FScreen.ScrollToBottom();
 
@@ -439,8 +450,13 @@ begin
     FSelStartY := r;
     FSelEndX := c;
     FSelEndY := r;
-    FSelActive := True;
-    Invalidate();
+    FSelecting := True;
+    if FSelActive then
+    begin
+      FSelActive := False;
+      Invalidate();
+    end;
+    SetFocus();
   end
   else if AButton = 3 then
   begin
@@ -452,11 +468,15 @@ procedure TConsoleTerminalView.HandleMouseMove(Sender: TFtDrawingArea; AX, AY: I
 var
   c, r: Integer;
 begin
-  if not FSelActive then Exit;
+  if not FSelecting then Exit;
   CellAt(AX, AY, c, r);
-  FSelEndX := c;
-  FSelEndY := r;
-  Invalidate();
+  if (c <> FSelEndX) or (r <> FSelEndY) then
+  begin
+    FSelEndX := c;
+    FSelEndY := r;
+    FSelActive := (FSelStartX <> FSelEndX) or (FSelStartY <> FSelEndY);
+    Invalidate();
+  end;
 end;
 
 procedure TConsoleTerminalView.HandleMouseUp(Sender: TFtDrawingArea;
@@ -464,8 +484,13 @@ procedure TConsoleTerminalView.HandleMouseUp(Sender: TFtDrawingArea;
 begin
   if AButton = 1 then
   begin
-    CellAt(AX, AY, FSelEndX, FSelEndY);
-    Invalidate();
+    if FSelecting then
+    begin
+      CellAt(AX, AY, FSelEndX, FSelEndY);
+      FSelActive := (FSelStartX <> FSelEndX) or (FSelStartY <> FSelEndY);
+      FSelecting := False;
+      Invalidate();
+    end;
   end;
 end;
 
@@ -534,6 +559,16 @@ begin
   Invalidate();
 end;
 
+procedure TConsoleTerminalView.ClearSelection();
+begin
+  if FSelActive or FSelecting then
+  begin
+    FSelActive := False;
+    FSelecting := False;
+    Invalidate();
+  end;
+end;
+
 procedure TConsoleTerminalView.CopySelection();
 var
   l1, c1, l2, c2: Integer;
@@ -541,6 +576,7 @@ var
 begin
   if not FSelActive then Exit;
   SelectionNormalized(l1, c1, l2, c2);
+  if (l1 = l2) and (c1 = c2) then Exit;
   text := FScreen.SelectedText(l1, c1, l2, c2);
   if text <> '' then
     FtApp().ClipboardText := text;
@@ -560,6 +596,7 @@ end;
 
 procedure TConsoleTerminalView.SelectAll();
 begin
+  FSelecting := False;
   FSelActive := True;
   FSelStartX := 0;
   FSelStartY := 0;
