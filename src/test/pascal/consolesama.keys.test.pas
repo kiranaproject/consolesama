@@ -21,6 +21,7 @@ type
     procedure TestSpecialKeys();
     procedure TestEditingKeys();
     procedure TestModifierCombinations();
+    procedure TestCapsLock();
     procedure TestUtf8Encoding();
   end;
 
@@ -100,6 +101,22 @@ begin
 
   // Ctrl+Shift+Left: mod param = 1 + 1 + 4 = 6 -> \e[1;6D
   AssertEquals('Ctrl+Shift+Left', #27'[1;6D', KeySymToTerminalInput(XK_Left, FtShiftMask or FtControlMask, False, False));
+end;
+
+procedure TKeysTranslationTest.TestCapsLock();
+begin
+  // CapsLock uppercases unshifted letters...
+  AssertEquals('Caps+ a', 'A', KeySymToTerminalInput(Ord('a'), FtLockMask, False, False));
+  // ...and lowercases Shift+letter (Caps inverts Shift).
+  AssertEquals('Caps+Shift+ a', 'a',
+    KeySymToTerminalInput(Ord('A'), FtLockMask or FtShiftMask, False, False));
+  // Non-letter keys are unaffected by CapsLock.
+  AssertEquals('Caps+7', '7', KeySymToTerminalInput(Ord('7'), FtLockMask, False, False));
+  // Ctrl combinations still produce control characters.
+  AssertEquals('Caps+Ctrl+c', #3,
+    KeySymToTerminalInput(Ord('c'), FtLockMask or FtControlMask, False, False));
+  // Latin-1 letters are case-folded too.
+  AssertEquals('Caps+é', #$C3#$89, KeySymToTerminalInput($E9, FtLockMask, False, False));
 end;
 
 procedure TKeysTranslationTest.TestUtf8Encoding();

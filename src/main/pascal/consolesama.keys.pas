@@ -111,6 +111,7 @@ function IsModifierKeySym(AKeySym: LongWord): Boolean;
 function IsCtrlPressed(AState: LongWord): Boolean;
 function IsAltPressed(AState: LongWord): Boolean;
 function IsShiftPressed(AState: LongWord): Boolean;
+function IsCapsLockOn(AState: LongWord): Boolean;
 
 // Encode a Unicode code point as UTF-8.
 function CodePointToUTF8(ACodePoint: LongWord): string;
@@ -133,6 +134,11 @@ end;
 function IsShiftPressed(AState: LongWord): Boolean;
 begin
   Result := (AState and FtShiftMask) <> 0;
+end;
+
+function IsCapsLockOn(AState: LongWord): Boolean;
+begin
+  Result := (AState and FtLockMask) <> 0;
 end;
 
 function IsModifierKeySym(AKeySym: LongWord): Boolean;
@@ -233,6 +239,24 @@ begin
     Result := #27 + '[' + IntToStr(ANum) + '~'
   else
     Result := #27 + '[' + IntToStr(ANum) + ';' + IntToStr(AMod) + '~';
+end;
+
+// X11 reports the already Shift-adjusted keysym but leaves CapsLock out of it.
+// Apply the lock modifier as a case toggle so CapsLock behaves like xterm.
+function ApplyCapsLock(AKeySym, AState: LongWord): LongWord;
+begin
+  Result := AKeySym;
+  if not IsCapsLockOn(AState) then Exit;
+
+  if (AKeySym >= Ord('a')) and (AKeySym <= Ord('z')) then
+    Exit(AKeySym - $20)
+  else if (AKeySym >= Ord('A')) and (AKeySym <= Ord('Z')) then
+    Exit(AKeySym + $20)
+  // Latin-1 letters: À-Þ / à-þ, excluding × ($D7) and ÷ ($F7).
+  else if (AKeySym >= $E0) and (AKeySym <= $FE) and (AKeySym <> $F7) then
+    Exit(AKeySym - $20)
+  else if (AKeySym >= $C0) and (AKeySym <= $DE) and (AKeySym <> $D7) then
+    Exit(AKeySym + $20);
 end;
 
 function KeySymToTerminalInput(AKeySym, AState: LongWord;
@@ -356,7 +380,7 @@ begin
     end;
   end;
 
-  txt := KeySymToText(AKeySym);
+  txt := KeySymToText(ApplyCapsLock(AKeySym, AState));
   if txt = '' then Exit('');
 
   // Alt acts as the meta/escape prefix.
