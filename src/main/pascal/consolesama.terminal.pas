@@ -321,7 +321,7 @@ begin
   end;
   FCols := cols;
   FRows := rows;
-  FScreen.Resize(FCols, FRows);
+  FScreen.Resize(FCols, FRows, FPTY = nil);
   if FPTY <> nil then
     FPTY.Resize(FCols, FRows);
   UpdateScrollBar();

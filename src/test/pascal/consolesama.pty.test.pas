@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, fpcunit, testregistry,
-  ConsoleSama.Pty;
+  ConsoleSama.Pty, ConsoleSama.Vt;
 
 type
   TPtySessionTest = class(TTestCase)
@@ -22,6 +22,7 @@ type
     procedure TestPtyWriteAndReadOutput();
     procedure TestPtyResize();
     procedure TestPtyTermination();
+    procedure TestInteractiveBashResizePromptNoDuplication();
   end;
 
 implementation
@@ -90,6 +91,104 @@ begin
   FPTY.Terminate();
   AssertEquals('Master closed', -1, FPTY.MasterFd);
   AssertTrue('Exited marked true', FPTY.Exited);
+end;
+
+procedure TPtySessionTest.TestInteractiveBashResizePromptNoDuplication();
+var
+  screen: TTerminalEmulator;
+  buf: array[0..2047] of Byte;
+  promptCount: Integer;
+
+  procedure PumpPty(ATimeoutMs: Integer);
+  var
+    t: QWord;
+    bytesRead: Integer;
+  begin
+    t := GetTickCount64();
+    while GetTickCount64() - t < ATimeoutMs do
+    begin
+      bytesRead := FPTY.ReadOutput(@buf[0], SizeOf(buf));
+      if bytesRead > 0 then
+        screen.Feed(@buf[0], bytesRead)
+      else
+        Sleep(10);
+    end;
+  end;
+
+  function CountPromptInScreen(): Integer;
+  var
+    r: Integer;
+    line: string;
+  begin
+    Result := 0;
+    for r := 0 to screen.Rows - 1 do
+    begin
+      line := screen.ViewLineText(r);
+      if Pos('UNIQUE_PROMPT$', line) > 0 then
+        Inc(Result);
+    end;
+  end;
+
+begin
+  FPTY := TTerminalPTY.Create(80, 24, '/bin/bash');
+  screen := TTerminalEmulator.Create(80, 24);
+  try
+    // Set custom prompt and clear screen
+    FPTY.WriteInput('PS1="UNIQUE_PROMPT$ "'#10'clear'#10);
+    PumpPty(500);
+
+    promptCount := CountPromptInScreen();
+    AssertEquals('Initial prompt count at 80 cols', 1, promptCount);
+
+    // Resize down to 30 columns:
+    screen.Resize(30, 24, False);
+    FPTY.Resize(30, 24);
+    PumpPty(200);
+
+    promptCount := CountPromptInScreen();
+    AssertEquals('Prompt count after resize to 30 cols must be exactly 1 (no duplicate)', 1, promptCount);
+
+    // Resize down to 20 columns:
+    screen.Resize(20, 24, False);
+    FPTY.Resize(20, 24);
+    PumpPty(200);
+
+    promptCount := CountPromptInScreen();
+    AssertEquals('Prompt count after resize to 20 cols must be exactly 1 (no triple)', 1, promptCount);
+
+    // Resize back to 80 columns:
+    screen.Resize(80, 24, False);
+    FPTY.Resize(80, 24);
+    PumpPty(200);
+
+    promptCount := CountPromptInScreen();
+    AssertEquals('Prompt count after resize back to 80 cols must be exactly 1', 1, promptCount);
+
+    // Now test with active typed text on command line:
+    FPTY.WriteInput('echo "testing active command line resize"');
+    PumpPty(200);
+
+    // Resize across multiple widths while command text is actively entered:
+    screen.Resize(45, 24, False);
+    FPTY.Resize(45, 24);
+    PumpPty(200);
+    promptCount := CountPromptInScreen();
+    AssertEquals('Prompt count with typed command at 45 cols', 1, promptCount);
+
+    screen.Resize(25, 24, False);
+    FPTY.Resize(25, 24);
+    PumpPty(200);
+    promptCount := CountPromptInScreen();
+    AssertEquals('Prompt count with typed command at 25 cols', 1, promptCount);
+
+    screen.Resize(80, 24, False);
+    FPTY.Resize(80, 24);
+    PumpPty(200);
+    promptCount := CountPromptInScreen();
+    AssertEquals('Prompt count with typed command back at 80 cols', 1, promptCount);
+  finally
+    screen.Free();
+  end;
 end;
 
 initialization

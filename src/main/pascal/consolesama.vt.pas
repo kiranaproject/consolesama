@@ -140,7 +140,7 @@ type
 
     procedure Feed(ABuffer: PByte; ACount: Integer);
     procedure Feed(const AData: RawByteString);
-    procedure Resize(ACols, ARows: Integer);
+    procedure Resize(ACols, ARows: Integer; AReflowCursorLine: Boolean = True);
     procedure Clear();
 
     // View access (0-based; row 0 is the top visible row after scrolling).
@@ -1268,9 +1268,9 @@ begin
   FChanged := True;
 end;
 
-procedure TTerminalEmulator.Resize(ACols, ARows: Integer);
+procedure TTerminalEmulator.Resize(ACols, ARows: Integer; AReflowCursorLine: Boolean = True);
 var
-  i, idx: Integer;
+  i, idx, k, paraStart, paraEnd: Integer;
   absCursorX, absCursorY: Integer;
   newCursorLine, newCursorCol: Integer;
   logicalCells: array of TTermCell;
@@ -1337,6 +1337,14 @@ begin
   if absCursorY < 0 then absCursorY := 0;
   if absCursorY >= Length(FLines) then absCursorY := Length(FLines) - 1;
 
+  paraStart := absCursorY;
+  while (paraStart > 0) and (paraStart - 1 < Length(FLinesWrapped)) and FLinesWrapped[paraStart - 1] do
+    Dec(paraStart);
+
+  paraEnd := absCursorY;
+  while (paraEnd < Length(FLines) - 1) and (paraEnd < Length(FLinesWrapped)) and FLinesWrapped[paraEnd] do
+    Inc(paraEnd);
+
   newCursorLine := -1;
   newCursorCol := -1;
 
@@ -1348,6 +1356,31 @@ begin
     idx := 0;
     while idx < Length(FLines) do
     begin
+      // When a shell is running, preserve the active cursor paragraph without reflow
+      // so GNU Readline's SIGWINCH cursor-up escape sequences match exact row offsets.
+      if (not AReflowCursorLine) and (idx = paraStart) then
+      begin
+        for k := paraStart to paraEnd do
+        begin
+          totalNew := Length(newLines);
+          SetLength(newLines, totalNew + 1);
+          SetLength(newWrapped, totalNew + 1);
+          SetLength(newLines[totalNew], ACols);
+          chunkLen := Min(ACols, Length(FLines[k]));
+          if chunkLen > 0 then
+            Move(FLines[k][0], newLines[totalNew][0], chunkLen * SizeOf(TTermCell));
+
+          newWrapped[totalNew] := FLinesWrapped[k];
+          if k = absCursorY then
+          begin
+            newCursorLine := totalNew;
+            newCursorCol := Min(ACols - 1, absCursorX);
+          end;
+        end;
+        idx := paraEnd + 1;
+        Continue;
+      end;
+
       SetLength(logicalCells, 0);
       cursorCharOffset := -1;
       cursorFound := False;

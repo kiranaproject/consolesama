@@ -386,23 +386,21 @@ begin
   // Resize window width down to 74 columns (even)
   FWindow.SetBounds(0, 0, w74, 500);
   AssertEquals('TermCols at w74', 74, tab.View.TermCols);
-  // Crucial invariant: cursor must NOT jump 4 cells left (to col 70) or clamp to col 73!
-  // At 74 cols, 74 characters fills row 0 (cols 0..73) and wraps cursor to row 1 col 0.
-  AssertEquals('Cursor row at 74 cols wraps to next row', 1, tab.View.Screen.CursorY);
-  AssertEquals('Cursor col at 74 cols is at col 0', 0, tab.View.Screen.CursorX);
+  // Active cursor row is preserved for shell readline redraw, avoiding desync and duplication
+  AssertEquals('Cursor row at 74 cols preserved on row 0', 0, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col at 74 cols clamped to col 73', 73, tab.View.Screen.CursorX);
 
   // Resize window width back up to 75 columns (odd)
   FWindow.SetBounds(0, 0, w75, 500);
   AssertEquals('TermCols at w75 again', 75, tab.View.TermCols);
-  // Line unwraps cleanly back to row 0, col 74!
-  AssertEquals('Cursor row restored to 0 at 75 cols', 0, tab.View.Screen.CursorY);
-  AssertEquals('Cursor col restored to 74 at 75 cols', 74, tab.View.Screen.CursorX);
+  AssertEquals('Cursor row on row 0 at 75 cols', 0, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col stays at 73 on w75 without PTY redraw', 73, tab.View.Screen.CursorX);
 
-  // Resize down to 74 columns again: must wrap consistently without jumping left
+  // Resize down to 74 columns again: must preserve row 0 without shift
   FWindow.SetBounds(0, 0, w74, 500);
   AssertEquals('TermCols at w74 second time', 74, tab.View.TermCols);
-  AssertEquals('Cursor row at 74 cols second time', 1, tab.View.Screen.CursorY);
-  AssertEquals('Cursor col at 74 cols second time', 0, tab.View.Screen.CursorX);
+  AssertEquals('Cursor row at 74 cols second time', 0, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col at 74 cols second time', 73, tab.View.Screen.CursorX);
 end;
 
 initialization
