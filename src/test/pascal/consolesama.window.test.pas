@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, Math, fpcunit, testregistry,
-  ftpas, ftpas.api, ftpas.types, ftpas.app, ftpas.widget, ftpas.layouts, ftpas.font,
+  ftpas, ftpas.api, ftpas.types, ftpas.app, ftpas.widget, ftpas.controls, ftpas.layouts, ftpas.font,
   ConsoleSama.Ftml.Res,
   ConsoleSama.Terminal,
   ConsoleSama.Window;
@@ -30,6 +30,8 @@ type
     procedure TestStatusBarInitialPosition();
     procedure TestThemeColorAdaptation();
     procedure TestContainerAndPanelSeparation();
+    procedure TestTerminalWidthFollowsWindowResize();
+    procedure TestTerminalScrollBarLifecycle();
   end;
 
 implementation
@@ -233,6 +235,79 @@ begin
   statusW := FWindow.FindWidget('statusBar');
   AssertNotNull('Status bar widget should exist', statusW);
   AssertTrue('Status bar is TFtPanel', statusW is TFtPanel);
+end;
+
+procedure TConsoleWindowTest.TestTerminalWidthFollowsWindowResize();
+var
+  tab: TConsoleTab;
+  initialW, initialCols: Integer;
+begin
+  tab := FWindow.ActiveTab();
+  AssertNotNull('Active tab should exist', tab);
+  AssertNotNull('Terminal view should exist', tab.View);
+
+  initialW := tab.View.Width;
+  initialCols := tab.View.TermCols;
+  AssertTrue('Initial width > 800: ' + IntToStr(initialW), initialW >= 800);
+  AssertTrue('Initial cols > 60: ' + IntToStr(initialCols), initialCols >= 60);
+
+  // 1. Expand window width to 1400
+  FWindow.SetBounds(0, 0, 1400, 700);
+
+  AssertTrue('Terminal width expanded: ' + IntToStr(tab.View.Width),
+    tab.View.Width > initialW + 300);
+  AssertTrue('Terminal columns increased: ' + IntToStr(tab.View.TermCols),
+    tab.View.TermCols > initialCols + 20);
+
+  // 2. Shrink window width to 800
+  FWindow.SetBounds(0, 0, 800, 600);
+
+  AssertTrue('Terminal width shrunk: ' + IntToStr(tab.View.Width),
+    tab.View.Width < initialW);
+  AssertTrue('Terminal columns decreased: ' + IntToStr(tab.View.TermCols),
+    tab.View.TermCols < initialCols);
+end;
+
+procedure TConsoleWindowTest.TestTerminalScrollBarLifecycle();
+var
+  tab: TConsoleTab;
+  sb: TFtScrollBar;
+  i: Integer;
+begin
+  tab := FWindow.ActiveTab();
+  AssertNotNull('Active tab should exist', tab);
+  AssertNotNull('Terminal view should exist', tab.View);
+  sb := tab.ScrollBar;
+  AssertNotNull('Scroll bar should exist', sb);
+  AssertEquals('Scroll bar must be vertical', Ord(ftsboVertical), Ord(sb.Orientation));
+
+  // Scrollbar must be pinned to the right edge of the terminal view
+  AssertEquals('ScrollBar X is next to View X+W', tab.View.X + tab.View.Width, sb.X);
+  AssertEquals('ScrollBar height matches View height', tab.View.Height, sb.Height);
+
+  // Initially 0 history lines
+  AssertEquals('Initially 0 history count', 0, tab.View.Screen.HistoryCount());
+  AssertEquals('Scrollbar max is 0', 0.0, sb.Max, 0.001);
+
+  // Feed 50 lines to generate scrollback history
+  for i := 1 to 50 do
+    tab.View.Screen.Feed('Line ' + IntToStr(i) + #13#10);
+
+  tab.View.UpdateScrollBar();
+  AssertTrue('History count should be > 0: ' + IntToStr(tab.View.Screen.HistoryCount()),
+    tab.View.Screen.HistoryCount() > 0);
+  AssertEquals('Scrollbar max matches history count', tab.View.Screen.HistoryCount(), Round(sb.Max));
+  AssertEquals('Scrollbar value at bottom equals max', sb.Max, sb.Value, 0.001);
+
+  // Test scrolling via scrollbar value
+  sb.Value := 0.0; // scroll to top
+  AssertTrue('Screen scroll offset changed after scrolling to top: ' + IntToStr(tab.View.Screen.ScrollOffset()),
+    tab.View.Screen.ScrollOffset() > 0);
+
+  // Scrolling to bottom
+  tab.View.ScrollToEnd();
+  AssertEquals('Scroll offset is 0 after ScrollToEnd', 0, tab.View.Screen.ScrollOffset());
+  AssertEquals('Scrollbar value returned to max', sb.Max, sb.Value, 0.001);
 end;
 
 initialization

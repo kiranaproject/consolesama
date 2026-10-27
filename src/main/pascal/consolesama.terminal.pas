@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, Math, Process,
-  ftpas, ftpas.types, ftpas.app, ftpas.creative, ftpas.canvas, ftpas.font, ftpas.widget,
+  ftpas, ftpas.types, ftpas.app, ftpas.creative, ftpas.canvas, ftpas.font, ftpas.widget, ftpas.controls,
   ConsoleSama.Pty, ConsoleSama.Vt, ConsoleSama.Keys;
 
 const
@@ -56,6 +56,7 @@ type
     FDefaultFg: TTermColor;
     FDefaultBg: TTermColor;
     FIsDark: Boolean;
+    FScrollBar: TFtScrollBar;
 
     procedure MeasureFont();
     procedure RecomputeGrid();
@@ -67,6 +68,8 @@ type
     procedure HandlePaint(Sender: TFtDrawingArea; ACanvas: TFtCanvas);
     procedure HandleWheel(Sender: TFtDrawingArea; AX, AY, ADeltaX, ADeltaY: Integer);
     procedure HandleResized(Sender: TFtDrawingArea; ANewWidth, ANewHeight: Integer);
+    procedure HandleScrollBarScroll(Sender: TFtWidget; Value: Double);
+    procedure SetScrollBar(AValue: TFtScrollBar);
     procedure SendInput(const AData: string);
     procedure PumpOutput();
     function  CellAt(AX, AY: Integer; out ACol, ARow: Integer): Boolean;
@@ -93,7 +96,10 @@ type
     procedure ResetZoom();
     procedure ShowExited();
     procedure RefreshThemeColors();
+    procedure SetBounds(AX, AY, AW, AH: Integer); override;
+    procedure UpdateScrollBar();
 
+    property ScrollBar: TFtScrollBar read FScrollBar write SetScrollBar;
     property IsDark: Boolean read FIsDark;
     property DefaultForeground: TTermColor read FDefaultFg;
     property DefaultBackground: TTermColor read FDefaultBg;
@@ -274,6 +280,9 @@ end;
 
 destructor TConsoleTerminalView.Destroy();
 begin
+  if FScrollBar <> nil then
+    FScrollBar.OnScroll := nil;
+  FScrollBar := nil;
   FreeAndNil(FPTY);
   FreeAndNil(FScreen);
   FreeAndNil(FFont);
@@ -305,13 +314,65 @@ var
 begin
   cols := Max(1, Floor(Width / FCellW));
   rows := Max(1, Floor(Height / FCellH));
-  if (cols = FCols) and (rows = FRows) then Exit;
+  if (cols = FCols) and (rows = FRows) then
+  begin
+    UpdateScrollBar();
+    Exit;
+  end;
   FCols := cols;
   FRows := rows;
   FScreen.Resize(FCols, FRows);
   if FPTY <> nil then
     FPTY.Resize(FCols, FRows);
+  UpdateScrollBar();
   Invalidate();
+end;
+
+procedure TConsoleTerminalView.SetBounds(AX, AY, AW, AH: Integer);
+begin
+  inherited SetBounds(AX, AY, AW, AH);
+  RecomputeGrid();
+end;
+
+procedure TConsoleTerminalView.SetScrollBar(AValue: TFtScrollBar);
+begin
+  if FScrollBar = AValue then Exit;
+  if FScrollBar <> nil then
+    FScrollBar.OnScroll := nil;
+  FScrollBar := AValue;
+  if FScrollBar <> nil then
+  begin
+    FScrollBar.OnScroll := @HandleScrollBarScroll;
+    FScrollBar.Step := 1.0;
+    UpdateScrollBar();
+  end;
+end;
+
+procedure TConsoleTerminalView.HandleScrollBarScroll(Sender: TFtWidget; Value: Double);
+var
+  histCount, newOffset: Integer;
+begin
+  if FScreen = nil then Exit;
+  histCount := FScreen.HistoryCount();
+  newOffset := Round(histCount - Value);
+  if newOffset < 0 then newOffset := 0;
+  if newOffset > histCount then newOffset := histCount;
+  FScreen.SetScrollOffset(newOffset);
+  Invalidate();
+end;
+
+procedure TConsoleTerminalView.UpdateScrollBar();
+var
+  histCount: Integer;
+  curVal: Double;
+begin
+  if (FScrollBar = nil) or (FScreen = nil) then Exit;
+  histCount := FScreen.HistoryCount();
+  FScrollBar.SetRange(0.0, histCount, FRows);
+  curVal := histCount - FScreen.ScrollOffset();
+  if Abs(FScrollBar.Value - curVal) > 0.001 then
+    FScrollBar.Value := curVal;
+  FScrollBar.Invalidate();
 end;
 
 function TConsoleTerminalView.CellRect(ACol, ARow: Integer): TFtRect;
@@ -574,6 +635,7 @@ begin
 
   // Any other key returns the view to the live bottom.
   FScreen.ScrollToBottom();
+  UpdateScrollBar();
 
   data := KeySymToTerminalInput(AKeySym, AState, FScreen.AppCursorKeys,
     FScreen.AppKeypad);
@@ -654,6 +716,7 @@ procedure TConsoleTerminalView.HandleWheel(Sender: TFtDrawingArea;
   AX, AY, ADeltaX, ADeltaY: Integer);
 begin
   FScreen.ScrollView(ADeltaY * 3);
+  UpdateScrollBar();
   Invalidate();
 end;
 
@@ -682,7 +745,8 @@ begin
     end;
   until n <= 0;
 
-  FScreen.ScrollToBottom();
+  if beforeOffset = 0 then
+    FScreen.ScrollToBottom();
 
   if FPTY.PollAlive() = False then
   begin
@@ -698,7 +762,10 @@ begin
   end;
 
   if (n = -1) or (FScreen.TakeChanged()) or (beforeOffset <> FScreen.ScrollOffset()) then
+  begin
+    UpdateScrollBar();
     Invalidate();
+  end;
 end;
 
 procedure TConsoleTerminalView.Pump();
@@ -764,18 +831,21 @@ end;
 procedure TConsoleTerminalView.ScrollToEnd();
 begin
   FScreen.ScrollToBottom();
+  UpdateScrollBar();
   Invalidate();
 end;
 
 procedure TConsoleTerminalView.ShowExited();
 begin
   FScreen.Feed(#13#10 + RawByteString('[process exited]') + #13#10);
+  UpdateScrollBar();
   Invalidate();
 end;
 
 procedure TConsoleTerminalView.ScrollPage(ADelta: Integer);
 begin
   FScreen.ScrollView(ADelta * FRows);
+  UpdateScrollBar();
   Invalidate();
 end;
 

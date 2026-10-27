@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, BaseUnix,
-  ftpas, ftpas.types, ftpas.api, ftpas.app, ftpas.widget, ftpas.layouts, ftpas.menus,
+  ftpas, ftpas.types, ftpas.api, ftpas.app, ftpas.widget, ftpas.controls, ftpas.layouts, ftpas.menus,
   ftpas.ftml, ftpas.font,
   ConsoleSama.Terminal, ConsoleSama.Vt, ConsoleSama.Pty, ConsoleSama.Keys;
 
@@ -19,6 +19,7 @@ type
   public
     Page: TFtWidget;
     View: TConsoleTerminalView;
+    ScrollBar: TFtScrollBar;
     Title: string;
     CustomTitle: Boolean;
   end;
@@ -246,31 +247,46 @@ begin
 end;
 
 function TConsoleSamaWindow.AddTerminalTab(): TConsoleTab;
+const
+  ScrollBarWidth = 14;
 var
   page: TFtTabPage;
   pageWidget: TFtWidget;
   view: TConsoleTerminalView;
+  sb: TFtScrollBar;
   tab: TConsoleTab;
-  w, h: Integer;
+  availW, availH, termW, pageX, pageY: Integer;
 begin
   Inc(FTabCounter);
 
   page := FNotebook.AddTab(Format('Terminal %d', [FTabCounter]), True);
   pageWidget := TFtWidget.Wrap(page.Handle, FNotebook, False);
 
-  w := FNotebook.Width;
-  h := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
-  if w < 1 then w := 800;
-  if h < 1 then h := 560;
+  availW := FNotebook.Width;
+  availH := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
+  if availW < 100 then availW := 980;
+  if availH < 100 then availH := 580;
 
-  view := TConsoleTerminalView.Create(pageWidget, pageWidget.X, pageWidget.Y, w, h);
+  pageX := FNotebook.X;
+  pageY := FNotebook.Y + Round(FNotebook.TabHeight);
+  termW := availW - ScrollBarWidth;
+  if termW < 50 then termW := availW;
+
+  pageWidget.SetBounds(pageX, pageY, availW, availH);
+
+  view := TConsoleTerminalView.Create(pageWidget, pageX, pageY, termW, availH);
   view.OnShortcut := @HandleShortcut;
   view.OnTitle := @HandleTerminalTitle;
   view.OnExit := @HandleTerminalExit;
 
+  sb := TFtScrollBar.Create(pageWidget, pageX + termW, pageY, ScrollBarWidth, availH, ftsboVertical);
+  sb.CornerRadius := 4.0;
+  view.ScrollBar := sb;
+
   tab := TConsoleTab.Create();
   tab.Page := pageWidget;
   tab.View := view;
+  tab.ScrollBar := sb;
   tab.Title := Format('Terminal %d', [FTabCounter]);
   tab.CustomTitle := False;
   FTabs.Add(tab);
@@ -292,6 +308,11 @@ begin
   if (AIndex < 0) or (AIndex >= FTabs.Count) then Exit;
   tab := TConsoleTab(FTabs[AIndex]);
 
+  if tab.ScrollBar <> nil then
+  begin
+    tab.ScrollBar.Visible := False;
+    FreeAndNil(tab.ScrollBar);
+  end;
   if tab.View <> nil then
   begin
     tab.View.Visible := False;
@@ -324,28 +345,42 @@ begin
 end;
 
 procedure TConsoleSamaWindow.LayoutTabs();
+const
+  ScrollBarWidth = 14;
 var
-  i, w, h: Integer;
+  i, availW, availH, termW, pageX, pageY: Integer;
   tab: TConsoleTab;
 begin
   if FNotebook = nil then Exit;
+
+  availW := FNotebook.Width;
+  availH := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
+  if availW < 100 then availW := 980;
+  if availH < 100 then availH := 580;
+
+  pageX := FNotebook.X;
+  pageY := FNotebook.Y + Round(FNotebook.TabHeight);
+  termW := availW - ScrollBarWidth;
+  if termW < 50 then termW := availW;
+
   for i := 0 to FTabs.Count - 1 do
   begin
     tab := TConsoleTab(FTabs[i]);
-    if tab.View = nil then Continue;
-    w := tab.Page.Width;
-    h := tab.Page.Height;
-    if (w < 8) or (h < 8) then
+    if tab.Page <> nil then
+      tab.Page.SetBounds(pageX, pageY, availW, availH);
+
+    if tab.View <> nil then
     begin
-      w := FNotebook.Width;
-      h := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
-    end;
-    if (w < 8) or (h < 8) then Continue;
-    if (tab.View.X <> tab.Page.X) or (tab.View.Y <> tab.Page.Y) or
-       (tab.View.Width <> w) or (tab.View.Height <> h) then
-    begin
-      tab.View.SetBounds(tab.Page.X, tab.Page.Y, w, h);
+      tab.View.SetBounds(pageX, pageY, termW, availH);
       tab.View.Invalidate();
+    end;
+
+    if tab.ScrollBar <> nil then
+    begin
+      tab.ScrollBar.SetBounds(pageX + termW, pageY, ScrollBarWidth, availH);
+      if tab.View <> nil then
+        tab.View.UpdateScrollBar();
+      tab.ScrollBar.Invalidate();
     end;
   end;
 end;
@@ -371,6 +406,7 @@ begin
   if (ANewIndex >= 0) and (ANewIndex < FTabs.Count) then
   begin
     FActiveIndex := ANewIndex;
+    LayoutTabs();
     FocusActive();
     UpdateStatus();
   end;
@@ -652,13 +688,19 @@ end;
 procedure TConsoleSamaWindow.MenuToggleDarkMode(Sender: TObject);
 var
   i: Integer;
+  tab: TConsoleTab;
 begin
   FtApp().DarkMode := not FtApp().DarkMode;
   if FTabs <> nil then
   begin
     for i := 0 to FTabs.Count - 1 do
-      if TConsoleTab(FTabs[i]).View <> nil then
-        TConsoleTab(FTabs[i]).View.RefreshThemeColors();
+    begin
+      tab := TConsoleTab(FTabs[i]);
+      if tab.View <> nil then
+        tab.View.RefreshThemeColors();
+      if tab.ScrollBar <> nil then
+        tab.ScrollBar.Invalidate();
+    end;
   end;
   Invalidate();
 end;

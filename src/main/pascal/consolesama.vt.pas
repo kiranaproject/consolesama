@@ -147,9 +147,12 @@ type
     function  CellText(const ACell: TTermCell): string;
     function  SelectedText(ALine1, ACol1, ALine2, ACol2: Integer): string;
 
+    function  HistoryCount(): Integer;
+    function  TotalLines(): Integer;
     function  ScrollOffset(): Integer;
     procedure ScrollView(ADelta: Integer);
     procedure ScrollToBottom();
+    procedure SetScrollOffset(AOffset: Integer);
     property  ScrollbackUsed: Integer read FMaxScrollback;
 
     function  TakeResponse(): string;
@@ -1362,6 +1365,18 @@ begin
   end;
 end;
 
+function TTerminalEmulator.HistoryCount(): Integer;
+begin
+  if FAltScreen then Exit(0);
+  Result := Length(FLines) - FRows;
+  if Result < 0 then Result := 0;
+end;
+
+function TTerminalEmulator.TotalLines(): Integer;
+begin
+  Result := Length(FLines);
+end;
+
 function TTerminalEmulator.ScrollOffset(): Integer;
 begin
   Result := FViewOffset;
@@ -1378,6 +1393,21 @@ begin
   if FViewOffset < 0 then FViewOffset := 0;
   if FViewOffset > maxOff then FViewOffset := maxOff;
   FChanged := True;
+end;
+
+procedure TTerminalEmulator.SetScrollOffset(AOffset: Integer);
+var
+  maxOff: Integer;
+begin
+  if FAltScreen then Exit;
+  maxOff := HistoryCount();
+  if AOffset < 0 then AOffset := 0;
+  if AOffset > maxOff then AOffset := maxOff;
+  if FViewOffset <> AOffset then
+  begin
+    FViewOffset := AOffset;
+    FChanged := True;
+  end;
 end;
 
 procedure TTerminalEmulator.ScrollToBottom();
