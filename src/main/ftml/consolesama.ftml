@@ -1,0 +1,93 @@
+// @form TConsoleSamaWindow
+//
+// consolesama — window chrome modelled in FTML.
+// The terminal panes themselves are native TFtDrawingArea widgets created by
+// the application and attached to the notebook pages; everything visible here
+// (menu bar, tab strip, status bar, colours) is declarative markup.
+//
+Rectangle {
+  id: root;
+  width: 960;
+  height: 640;
+  color: "#171a21";
+
+  MenuBar {
+    id: menuBar;
+    anchors.top: parent.top;
+    anchors.left: parent.left;
+    anchors.right: parent.right;
+    height: 28;
+
+    Menu {
+      title: "File";
+      MenuItem { id: newTabItem;  text: "New Tab";        shortcut: "Ctrl+Shift+T"; }
+      MenuItem { id: newWindowItem; text: "New Window";   shortcut: "Ctrl+Shift+N"; }
+      Separator { }
+      MenuItem { id: closeTabItem; text: "Close Tab";     shortcut: "Ctrl+Shift+W"; }
+      MenuItem { id: quitItem;     text: "Quit";          shortcut: "Ctrl+Q"; }
+    }
+
+    Menu {
+      title: "Edit";
+      MenuItem { id: copyItem;      text: "Copy";          shortcut: "Ctrl+Shift+C"; }
+      MenuItem { id: pasteItem;     text: "Paste";         shortcut: "Ctrl+Shift+V"; }
+      MenuItem { id: selectAllItem; text: "Select All";    shortcut: "Ctrl+Shift+A"; }
+    }
+
+    Menu {
+      title: "View";
+      MenuItem { id: zoomInItem;   text: "Zoom In";        shortcut: "Ctrl+Plus"; }
+      MenuItem { id: zoomOutItem;  text: "Zoom Out";       shortcut: "Ctrl+Minus"; }
+      Separator { }
+      MenuItem { id: scrollUpItem;   text: "Scroll Up";    shortcut: "Shift+PageUp"; }
+      MenuItem { id: scrollDownItem; text: "Scroll Down";  shortcut: "Shift+PageDown"; }
+      MenuItem { id: scrollEndItem;  text: "Scroll to End"; }
+    }
+
+    Menu {
+      title: "Help";
+      MenuItem { id: aboutItem; text: "About consolesama"; }
+    }
+  }
+
+  Notebook {
+    id: tabHost;
+    anchors.top: menuBar.bottom;
+    anchors.left: parent.left;
+    anchors.right: parent.right;
+    anchors.bottom: statusBar.top;
+  }
+
+  Rectangle {
+    id: statusBar;
+    anchors.left: parent.left;
+    anchors.right: parent.right;
+    anchors.bottom: parent.bottom;
+    height: 24;
+    color: "#11141a";
+
+    Text {
+      id: statusText;
+      anchors.left: parent.left;
+      anchors.verticalCenter: parent.verticalCenter;
+      anchors.leftMargin: 8;
+      width: 700;
+      height: 20;
+      text: "consolesama — ready";
+      color: "#7f8c98";
+      font: "Sans 9";
+    }
+
+    Text {
+      id: statusRight;
+      anchors.right: parent.right;
+      anchors.verticalCenter: parent.verticalCenter;
+      anchors.rightMargin: 8;
+      width: 260;
+      height: 20;
+      text: "";
+      color: "#5c6773";
+      font: "Sans 9";
+    }
+  }
+}

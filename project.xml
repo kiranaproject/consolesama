@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <name>consolesama</name>
+  <version>0.0.1-SNAPSHOT</version>
+  <author>Dio Affriza</author>
+  <license>MPL-2.0</license>
+
+  <build>
+    <mainSource>consolesama.pas</mainSource>
+    <executableName>consolesama</executableName>
+    <projectType>application</projectType>
+    <outputDirectory>target</outputDirectory>
+
+    <manualUnitPaths>true</manualUnitPaths>
+    <unitPaths>
+      <path>src/main/pascal</path>
+    </unitPaths>
+  </build>
+
+  <test>
+    <testSource>TestRunner.pas</testSource>
+    <frameworkOptions>
+      <option>--all --format=plain</option>
+    </frameworkOptions>
+  </test>
+  
+  <dependencies>
+    <dependency>
+      <name>florialib</name>
+      <version>0.0.1-SNAPSHOT</version>
+    </dependency>
+    <dependency>
+      <name>ftpas</name>
+      <version>0.0.1-SNAPSHOT</version>
+    </dependency>
+  </dependencies>
+</project>

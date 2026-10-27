@@ -1,0 +1,655 @@
+// consolesama.window.pas — application window
+// Copyright (c) 2026 Dio Affriza — SPDX-License-Identifier: MPL-2.0
+
+unit ConsoleSama.Window;
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  Classes, SysUtils, BaseUnix,
+  ftpas, ftpas.types, ftpas.api, ftpas.widget, ftpas.layouts, ftpas.menus,
+  ftpas.ftml, ftpas.font,
+  ConsoleSama.Terminal, ConsoleSama.Vt, ConsoleSama.Pty, ConsoleSama.Keys;
+
+type
+  // One notebook page plus the terminal living inside it.
+  TConsoleTab = class
+  public
+    Page: TFtWidget;
+    View: TConsoleTerminalView;
+    Title: string;
+    CustomTitle: Boolean;
+  end;
+
+  TConsoleSamaWindow = class(TFtFTMLForm)
+  private
+    FNotebook: TFtNotebook;
+    FStatusText: TFtLabel;
+    FStatusRight: TFtLabel;
+    FTabs: TList;
+    FActiveIndex: Integer;
+    FTabCounter: Integer;
+    FLastPump: QWord;
+    FLastStatus: QWord;
+    FClosing: Boolean;
+
+    procedure SetupUI();
+    procedure DumpLayout(const ATag: string);
+    procedure HookMenu(const AId: string; AHandler: TNotifyEvent);
+    function  AddTerminalTab(): TConsoleTab;
+    procedure CloseTab(AIndex: Integer);
+    procedure LayoutTabs();
+    procedure UpdateStatus();
+    procedure UpdateTitle();
+    function  ActiveTab(): TConsoleTab;
+    procedure FocusActive();
+    procedure HandleTabChange(Sender: TFtNotebook; ANewIndex, AOldIndex: Integer);
+    function  HandleShortcut(Sender: TObject; AKeySym, AState: LongWord): Boolean;
+    procedure HandleTerminalTitle(Sender: TObject; const ATitle: string);
+    procedure HandleTerminalExit(Sender: TObject);
+    procedure PumpTabs();
+
+    procedure MenuNewTab(Sender: TObject);
+    procedure MenuNewWindow(Sender: TObject);
+    procedure MenuCloseTab(Sender: TObject);
+    procedure MenuQuit(Sender: TObject);
+    procedure MenuCopy(Sender: TObject);
+    procedure MenuPaste(Sender: TObject);
+    procedure MenuSelectAll(Sender: TObject);
+    procedure MenuZoomIn(Sender: TObject);
+    procedure MenuZoomOut(Sender: TObject);
+    procedure MenuScrollUp(Sender: TObject);
+    procedure MenuScrollDown(Sender: TObject);
+    procedure MenuScrollEnd(Sender: TObject);
+    procedure MenuAbout(Sender: TObject);
+  protected
+    procedure DoResize(ANewWidth, ANewHeight: Integer); override;
+  public
+    constructor Create(); reintroduce;
+    destructor Destroy(); override;
+
+    procedure PumpTicks();
+    property Notebook: TFtNotebook read FNotebook;
+  end;
+
+// Spawn another consolesama process (used by File ▸ New Window).
+procedure SpawnNewConsolesama();
+
+implementation
+
+uses
+  Math, ftpas.dialogs;
+
+var
+  GCurrentWindow: TConsoleSamaWindow = nil;
+
+// ----------------------------- Tick plumbing -----------------------------
+
+procedure TickDispatcher(AUserData: Pointer); cdecl;
+begin
+  if AUserData <> nil then
+    TConsoleSamaWindow(AUserData).PumpTicks();
+end;
+
+procedure SpawnNewConsolesama();
+var
+  pid: TPid;
+  exe: string;
+  argv: array[0..1] of PChar;
+begin
+  exe := ParamStr(0);
+  if exe = '' then Exit;
+  pid := fpFork();
+  if pid = 0 then
+  begin
+    argv[0] := PChar(exe);
+    argv[1] := nil;
+    fpExecv(PChar(exe), @argv[0]);
+    Halt(127);
+  end;
+end;
+
+// ------------------------------- Window ----------------------------------
+
+constructor TConsoleSamaWindow.Create();
+begin
+  inherited Create(980, 660, 'consolesama', 'TConsoleSamaWindow');
+  FTabs := TList.Create();
+  FActiveIndex := -1;
+  FTabCounter := 0;
+  FLastPump := 0;
+  FLastStatus := 0;
+  FClosing := False;
+  GCurrentWindow := Self;
+
+  SetupUI();
+
+  // First terminal tab.
+  AddTerminalTab();
+
+  if Assigned(ft_set_tick_callback) then
+    ft_set_tick_callback(@TickDispatcher, Pointer(Self));
+end;
+
+destructor TConsoleSamaWindow.Destroy();
+var
+  i: Integer;
+begin
+  if Assigned(ft_set_tick_callback) then
+    ft_set_tick_callback(nil, nil);
+  if GCurrentWindow = Self then
+    GCurrentWindow := nil;
+  if FTabs <> nil then
+  begin
+    for i := 0 to FTabs.Count - 1 do
+      TConsoleTab(FTabs[i]).Free();
+    FreeAndNil(FTabs);
+  end;
+  inherited Destroy();
+end;
+
+procedure TConsoleSamaWindow.SetupUI();
+var
+  w: TFtWidget;
+begin
+  w := FindWidget('tabHost');
+  if w is TFtNotebook then
+    FNotebook := TFtNotebook(w);
+  w := FindWidget('statusText');
+  if w is TFtLabel then
+    FStatusText := TFtLabel(w);
+  w := FindWidget('statusRight');
+  if w is TFtLabel then
+    FStatusRight := TFtLabel(w);
+
+  if FNotebook = nil then
+  begin
+    WriteLn(StdErr, '[consolesama] FTML design has no Notebook with id tabHost.');
+    Halt(2);
+  end;
+
+  FNotebook.OnTabChange := @HandleTabChange;
+
+  HookMenu('newTabItem', @MenuNewTab);
+  HookMenu('newWindowItem', @MenuNewWindow);
+  HookMenu('closeTabItem', @MenuCloseTab);
+  HookMenu('quitItem', @MenuQuit);
+  HookMenu('copyItem', @MenuCopy);
+  HookMenu('pasteItem', @MenuPaste);
+  HookMenu('selectAllItem', @MenuSelectAll);
+  HookMenu('zoomInItem', @MenuZoomIn);
+  HookMenu('zoomOutItem', @MenuZoomOut);
+  HookMenu('scrollUpItem', @MenuScrollUp);
+  HookMenu('scrollDownItem', @MenuScrollDown);
+  HookMenu('scrollEndItem', @MenuScrollEnd);
+  HookMenu('aboutItem', @MenuAbout);
+
+  if GetEnvironmentVariable('CS_DEBUG') = '1' then
+    DumpLayout('after SetupUI');
+end;
+
+procedure TConsoleSamaWindow.DumpLayout(const ATag: string);
+var
+  ids: array[0..3] of string = ('menuBar', 'tabHost', 'statusBar', 'statusText');
+  i: Integer;
+  w: TFtWidget;
+begin
+  WriteLn(StdErr, '--- layout ', ATag, ' window=', Width, 'x', Height);
+  for i := Low(ids) to High(ids) do
+  begin
+    w := FindWidget(ids[i]);
+    if w = nil then
+      WriteLn(StdErr, '  ', ids[i], ': <none>')
+    else
+      WriteLn(StdErr, '  ', ids[i], ': ', w.ClassName, ' x=', w.X, ' y=', w.Y,
+        ' w=', w.Width, ' h=', w.Height, ' vis=', w.Visible);
+  end;
+  if FNotebook <> nil then
+    WriteLn(StdErr, '  notebook pages=', FNotebook.PageCount,
+      ' tabHeight=', FNotebook.TabHeight);
+end;
+
+procedure TConsoleSamaWindow.HookMenu(const AId: string; AHandler: TNotifyEvent);
+var
+  mi: TFtMenuItem;
+begin
+  mi := FindMenuItem(AId);
+  if mi <> nil then
+    mi.OnClick := TFtMenuClickEvent(AHandler);
+end;
+
+function TConsoleSamaWindow.ActiveTab(): TConsoleTab;
+begin
+  if (FActiveIndex >= 0) and (FActiveIndex < FTabs.Count) then
+    Result := TConsoleTab(FTabs[FActiveIndex])
+  else
+    Result := nil;
+end;
+
+function TConsoleSamaWindow.AddTerminalTab(): TConsoleTab;
+var
+  page: TFtTabPage;
+  pageWidget: TFtWidget;
+  view: TConsoleTerminalView;
+  tab: TConsoleTab;
+  w, h: Integer;
+begin
+  Inc(FTabCounter);
+
+  page := FNotebook.AddTab(Format('Terminal %d', [FTabCounter]), True);
+  pageWidget := TFtWidget.Wrap(page.Handle, FNotebook, False);
+
+  w := FNotebook.Width;
+  h := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
+  if w < 1 then w := 800;
+  if h < 1 then h := 560;
+
+  view := TConsoleTerminalView.Create(pageWidget, pageWidget.X, pageWidget.Y, w, h);
+  view.OnShortcut := @HandleShortcut;
+  view.OnTitle := @HandleTerminalTitle;
+  view.OnExit := @HandleTerminalExit;
+
+  tab := TConsoleTab.Create();
+  tab.Page := pageWidget;
+  tab.View := view;
+  tab.Title := Format('Terminal %d', [FTabCounter]);
+  tab.CustomTitle := False;
+  FTabs.Add(tab);
+
+  FActiveIndex := FTabs.Count - 1;
+  FNotebook.ActiveIndex := FActiveIndex;
+
+  view.StartShell('', '');
+  LayoutTabs();
+  view.SetFocus();
+  UpdateStatus();
+  Result := tab;
+end;
+
+procedure TConsoleSamaWindow.CloseTab(AIndex: Integer);
+var
+  tab: TConsoleTab;
+begin
+  if (AIndex < 0) or (AIndex >= FTabs.Count) then Exit;
+  tab := TConsoleTab(FTabs[AIndex]);
+
+  if tab.View <> nil then
+  begin
+    tab.View.Visible := False;
+    FreeAndNil(tab.View);
+  end;
+  if tab.Page <> nil then
+  begin
+    FreeAndNil(tab.Page);
+  end;
+
+  FTabs.Delete(AIndex);
+  tab.Free();
+
+  if FNotebook <> nil then
+    FNotebook.RemoveTab(AIndex);
+
+  if FTabs.Count = 0 then
+  begin
+    Close();
+    Exit;
+  end;
+
+  if AIndex >= FTabs.Count then
+    FActiveIndex := FTabs.Count - 1
+  else
+    FActiveIndex := AIndex;
+  FNotebook.ActiveIndex := FActiveIndex;
+  FocusActive();
+  UpdateStatus();
+end;
+
+procedure TConsoleSamaWindow.LayoutTabs();
+var
+  i, w, h: Integer;
+  tab: TConsoleTab;
+begin
+  if FNotebook = nil then Exit;
+  for i := 0 to FTabs.Count - 1 do
+  begin
+    tab := TConsoleTab(FTabs[i]);
+    if tab.View = nil then Continue;
+    w := tab.Page.Width;
+    h := tab.Page.Height;
+    if (w < 8) or (h < 8) then
+    begin
+      w := FNotebook.Width;
+      h := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
+    end;
+    if (w < 8) or (h < 8) then Continue;
+    if (tab.View.X <> tab.Page.X) or (tab.View.Y <> tab.Page.Y) or
+       (tab.View.Width <> w) or (tab.View.Height <> h) then
+    begin
+      tab.View.SetBounds(tab.Page.X, tab.Page.Y, w, h);
+      tab.View.Invalidate();
+    end;
+  end;
+end;
+
+procedure TConsoleSamaWindow.DoResize(ANewWidth, ANewHeight: Integer);
+begin
+  inherited DoResize(ANewWidth, ANewHeight);
+  LayoutTabs();
+end;
+
+procedure TConsoleSamaWindow.FocusActive();
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if (tab <> nil) and (tab.View <> nil) then
+    tab.View.SetFocus();
+end;
+
+procedure TConsoleSamaWindow.HandleTabChange(Sender: TFtNotebook;
+  ANewIndex, AOldIndex: Integer);
+begin
+  if (ANewIndex >= 0) and (ANewIndex < FTabs.Count) then
+  begin
+    FActiveIndex := ANewIndex;
+    FocusActive();
+    UpdateStatus();
+  end;
+end;
+
+procedure TConsoleSamaWindow.PumpTabs();
+var
+  i: Integer;
+  tab: TConsoleTab;
+begin
+  for i := 0 to FTabs.Count - 1 do
+  begin
+    tab := TConsoleTab(FTabs[i]);
+    if tab.View <> nil then
+      tab.View.Pump();
+  end;
+end;
+
+procedure TConsoleSamaWindow.PumpTicks();
+var
+  nowTick: QWord;
+begin
+  nowTick := GetTickCount64();
+  if nowTick - FLastPump < 8 then
+  begin
+    Sleep(8 - Byte(nowTick - FLastPump));
+    Exit;
+  end;
+  FLastPump := nowTick;
+
+  PumpTabs();
+  LayoutTabs();
+
+  if nowTick - FLastStatus > 500 then
+  begin
+    FLastStatus := nowTick;
+    UpdateStatus();
+  end;
+end;
+
+procedure TConsoleSamaWindow.UpdateStatus();
+var
+  tab: TConsoleTab;
+  right: string;
+begin
+  tab := ActiveTab();
+  if FStatusText <> nil then
+  begin
+    if tab = nil then
+      FStatusText.Text := 'consolesama'
+    else
+      FStatusText.Text := Format('%s — %dx%d', [tab.Title, tab.View.TermCols, tab.View.TermRows]);
+  end;
+  if FStatusRight <> nil then
+  begin
+    if (tab <> nil) and (tab.View.PTY <> nil) then
+      right := Format('pid %d', [tab.View.PTY.ChildPid])
+    else
+      right := '';
+    FStatusRight.Text := right;
+  end;
+end;
+
+procedure TConsoleSamaWindow.UpdateTitle();
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if (tab <> nil) and tab.CustomTitle then
+    Title := tab.Title + ' — consolesama'
+  else
+    Title := 'consolesama';
+end;
+
+procedure TConsoleSamaWindow.HandleTerminalTitle(Sender: TObject; const ATitle: string);
+var
+  i: Integer;
+  tab: TConsoleTab;
+begin
+  for i := 0 to FTabs.Count - 1 do
+  begin
+    tab := TConsoleTab(FTabs[i]);
+    if tab.View = Sender then
+    begin
+      if ATitle <> '' then
+      begin
+        tab.Title := ATitle;
+        tab.CustomTitle := True;
+      end
+      else
+      begin
+        tab.Title := Format('Terminal %d', [i + 1]);
+        tab.CustomTitle := False;
+      end;
+      FNotebook.GetPage(i).Title := tab.Title;
+      if i = FActiveIndex then
+      begin
+        UpdateTitle();
+        UpdateStatus();
+      end;
+      Break;
+    end;
+  end;
+end;
+
+procedure TConsoleSamaWindow.HandleTerminalExit(Sender: TObject);
+var
+  i: Integer;
+  tab: TConsoleTab;
+begin
+  if FClosing then Exit;
+  for i := 0 to FTabs.Count - 1 do
+  begin
+    tab := TConsoleTab(FTabs[i]);
+    if tab.View = Sender then
+    begin
+      CloseTab(i);
+      Break;
+    end;
+  end;
+end;
+
+function TConsoleSamaWindow.HandleShortcut(Sender: TObject; AKeySym,
+  AState: LongWord): Boolean;
+var
+  ctrl, shift: Boolean;
+  ch: Char;
+  tab: TConsoleTab;
+begin
+  Result := False;
+  ctrl := IsCtrlPressed(AState);
+  shift := IsShiftPressed(AState);
+  if not ctrl then Exit;
+
+  ch := #0;
+  if (AKeySym >= 32) and (AKeySym <= 126) then
+    ch := UpCase(Char(AKeySym));
+
+  if shift then
+  begin
+    case ch of
+      'T':
+        begin
+          AddTerminalTab();
+          Result := True;
+        end;
+      'W':
+        begin
+          CloseTab(FActiveIndex);
+          Result := True;
+        end;
+      'N':
+        begin
+          SpawnNewConsolesama();
+          Result := True;
+        end;
+      'C':
+        begin
+          tab := ActiveTab();
+          if tab <> nil then tab.View.CopySelection();
+          Result := True;
+        end;
+      'V':
+        begin
+          tab := ActiveTab();
+          if tab <> nil then tab.View.PasteFromClipboard();
+          Result := True;
+        end;
+      'A':
+        begin
+          tab := ActiveTab();
+          if tab <> nil then tab.View.SelectAll();
+          Result := True;
+        end;
+    end;
+    Exit;
+  end;
+
+  if (AKeySym = Ord('+')) or (AKeySym = Ord('=')) or (AKeySym = XK_KP_Add) then
+  begin
+    tab := ActiveTab();
+    if tab <> nil then tab.View.Zoom(1);
+    Result := True;
+  end
+  else if (AKeySym = Ord('-')) or (AKeySym = Ord('_')) or (AKeySym = XK_KP_Subtract) then
+  begin
+    tab := ActiveTab();
+    if tab <> nil then tab.View.Zoom(-1);
+    Result := True;
+  end
+  else if (AKeySym = Ord('0')) or (AKeySym = XK_KP_0) then
+  begin
+    tab := ActiveTab();
+    if tab <> nil then tab.View.Zoom(12 - tab.View.FontSize);
+    Result := True;
+  end
+  else if ch = 'Q' then
+  begin
+    Close();
+    Result := True;
+  end;
+end;
+
+// --------------------------------- Menus ---------------------------------
+
+procedure TConsoleSamaWindow.MenuNewTab(Sender: TObject);
+begin
+  AddTerminalTab();
+end;
+
+procedure TConsoleSamaWindow.MenuNewWindow(Sender: TObject);
+begin
+  SpawnNewConsolesama();
+end;
+
+procedure TConsoleSamaWindow.MenuCloseTab(Sender: TObject);
+begin
+  CloseTab(FActiveIndex);
+end;
+
+procedure TConsoleSamaWindow.MenuQuit(Sender: TObject);
+begin
+  Close();
+end;
+
+procedure TConsoleSamaWindow.MenuCopy(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.CopySelection();
+end;
+
+procedure TConsoleSamaWindow.MenuPaste(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.PasteFromClipboard();
+end;
+
+procedure TConsoleSamaWindow.MenuSelectAll(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.SelectAll();
+end;
+
+procedure TConsoleSamaWindow.MenuZoomIn(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.Zoom(1);
+end;
+
+procedure TConsoleSamaWindow.MenuZoomOut(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.Zoom(-1);
+end;
+
+procedure TConsoleSamaWindow.MenuScrollUp(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.ScrollPage(1);
+end;
+
+procedure TConsoleSamaWindow.MenuScrollDown(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.ScrollPage(-1);
+end;
+
+procedure TConsoleSamaWindow.MenuScrollEnd(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.ScrollToEnd();
+end;
+
+procedure TConsoleSamaWindow.MenuAbout(Sender: TObject);
+begin
+  TFtMessageDialog.ShowInfo('About consolesama',
+    'a terminal built with ftpas',
+    'consolesama is a MATE Terminal-style console built on the Floria Toolkit ' +
+    'Pascal binding (ftpas), with its window chrome modelled in FTML and ' +
+    'embedded into the executable.');
+end;
+
+end.
