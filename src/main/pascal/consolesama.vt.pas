@@ -50,7 +50,9 @@ type
     // Main screen: the last FRows entries are the visible viewport; entries
     // before them are scrollback.
     FLines: array of TTermLine;
+    FLinesWrapped: array of Boolean;
     FSavedLines: array of TTermLine;
+    FSavedLinesWrapped: array of Boolean;
     FAltScreen: Boolean;
     FAltCursorX, FAltCursorY: Integer;
 
@@ -238,9 +240,14 @@ var
   i: Integer;
 begin
   SetLength(FLines, ARows);
+  SetLength(FLinesWrapped, ARows);
   for i := 0 to ARows - 1 do
+  begin
     FLines[i] := NewLine();
+    FLinesWrapped[i] := False;
+  end;
   SetLength(FSavedLines, 0);
+  SetLength(FSavedLinesWrapped, 0);
   SetLength(FTabStops, ACols);
 end;
 
@@ -249,8 +256,12 @@ var
   i: Integer;
 begin
   SetLength(FLines, FRows);
+  SetLength(FLinesWrapped, FRows);
   for i := 0 to FRows - 1 do
+  begin
     FLines[i] := NewLine();
+    FLinesWrapped[i] := False;
+  end;
   FCursorX := 0;
   FCursorY := 0;
   FSavedCursorX := 0;
@@ -380,13 +391,19 @@ begin
         if (Length(FLines) - FRows) >= FMaxScrollback then
         begin
           for j := 0 to Length(FLines) - 2 do
+          begin
             FLines[j] := FLines[j + 1];
+            FLinesWrapped[j] := FLinesWrapped[j + 1];
+          end;
           FLines[Length(FLines) - 1] := blank;
+          FLinesWrapped[Length(FLines) - 1] := False;
         end
         else
         begin
           SetLength(FLines, Length(FLines) + 1);
+          SetLength(FLinesWrapped, Length(FLinesWrapped) + 1);
           FLines[Length(FLines) - 1] := blank;
+          FLinesWrapped[Length(FLinesWrapped) - 1] := False;
         end;
       end;
     end;
@@ -396,11 +413,17 @@ begin
   topIdx := GetScreenRow(FScrollTop);
   botIdx := GetScreenRow(FScrollBottom);
   for i := FScrollTop to FScrollBottom - ACount do
+  begin
     FLines[GetScreenRow(i)] := FLines[GetScreenRow(i + ACount)];
+    FLinesWrapped[GetScreenRow(i)] := FLinesWrapped[GetScreenRow(i + ACount)];
+  end;
   for i := FScrollBottom - ACount + 1 to FScrollBottom do
   begin
     if i <= FScrollBottom then
+    begin
       FLines[GetScreenRow(i)] := NewLine();
+      FLinesWrapped[GetScreenRow(i)] := False;
+    end;
   end;
   FChanged := True;
   if topIdx < 0 then topIdx := 0;
@@ -415,9 +438,15 @@ begin
   if ACount > (FScrollBottom - FScrollTop + 1) then
     ACount := FScrollBottom - FScrollTop + 1;
   for i := FScrollBottom downto FScrollTop + ACount do
+  begin
     FLines[GetScreenRow(i)] := FLines[GetScreenRow(i - ACount)];
+    FLinesWrapped[GetScreenRow(i)] := FLinesWrapped[GetScreenRow(i - ACount)];
+  end;
   for i := FScrollTop to FScrollTop + ACount - 1 do
+  begin
     FLines[GetScreenRow(i)] := NewLine();
+    FLinesWrapped[GetScreenRow(i)] := False;
+  end;
   FChanged := True;
 end;
 
@@ -489,6 +518,9 @@ begin
   begin
     if FAutoWrap then
     begin
+      y := VisibleTop() + FCursorY;
+      if (y >= 0) and (y < Length(FLinesWrapped)) then
+        FLinesWrapped[y] := True;
       FCursorX := 0;
       NewlineWithScroll();
     end;
@@ -511,6 +543,9 @@ begin
   begin
     if FAutoWrap then
     begin
+      y := VisibleTop() + FCursorY;
+      if (y >= 0) and (y < Length(FLinesWrapped)) then
+        FLinesWrapped[y] := True;
       FCursorX := 0;
       NewlineWithScroll();
       line := CursorLine();
@@ -1181,12 +1216,21 @@ begin
   FAltCursorX := FCursorX;
   FAltCursorY := FCursorY;
   SetLength(FSavedLines, Length(FLines));
+  SetLength(FSavedLinesWrapped, Length(FLinesWrapped));
   for i := 0 to High(FLines) do
+  begin
     FSavedLines[i] := Copy(FLines[i], 0, Length(FLines[i]));
+    FSavedLinesWrapped[i] := FLinesWrapped[i];
+  end;
   FLines := nil;
+  FLinesWrapped := nil;
   SetLength(FLines, FRows);
+  SetLength(FLinesWrapped, FRows);
   for i := 0 to FRows - 1 do
+  begin
     FLines[i] := NewLine();
+    FLinesWrapped[i] := False;
+  end;
   FAltScreen := True;
   FCursorX := 0;
   FCursorY := 0;
@@ -1204,10 +1248,16 @@ var
 begin
   if not FAltScreen then Exit;
   FLines := nil;
+  FLinesWrapped := nil;
   SetLength(FLines, Length(FSavedLines));
+  SetLength(FLinesWrapped, Length(FSavedLinesWrapped));
   for i := 0 to High(FSavedLines) do
+  begin
     FLines[i] := FSavedLines[i];
+    FLinesWrapped[i] := FSavedLinesWrapped[i];
+  end;
   SetLength(FSavedLines, 0);
+  SetLength(FSavedLinesWrapped, 0);
   FAltScreen := False;
   FCursorX := FAltCursorX;
   FCursorY := FAltCursorY;
@@ -1220,43 +1270,227 @@ end;
 
 procedure TTerminalEmulator.Resize(ACols, ARows: Integer);
 var
-  oldTop, newTopIdx, i, newLen: Integer;
+  i, idx: Integer;
+  absCursorX, absCursorY: Integer;
+  newCursorLine, newCursorCol: Integer;
+  logicalCells: array of TTermCell;
+  cellCount, chunkStart, chunkLen: Integer;
+  cursorCharOffset, currentCellOffset: Integer;
+  cursorFound: Boolean;
   newLines: array of TTermLine;
+  newWrapped: array of Boolean;
+  totalNew, bufTotalLines, availAfter, maxTrim, trimCount: Integer;
+
+  function LineContentLen(const ALine: TTermLine): Integer;
+  var
+    k: Integer;
+  begin
+    for k := High(ALine) downto 0 do
+    begin
+      if (ALine[k].Code <> 0) and (ALine[k].Code <> 32) then
+        Exit(k + 1);
+      if ALine[k].Attr.BG.Kind <> tckDefault then
+        Exit(k + 1);
+    end;
+    Result := 0;
+  end;
+
 begin
   if ACols < 1 then ACols := 1;
   if ARows < 1 then ARows := 1;
   if (ACols = FCols) and (ARows = FRows) then Exit;
 
-  // Reflow: keep stored lines, resize rows and cols.
-  oldTop := 0;
-  newLen := Length(FLines) + (ARows - FRows);
-  if newLen < ARows then newLen := ARows;
-  SetLength(newLines, newLen);
-  for i := 0 to newLen - 1 do
+  // Alternate screen resize: TUI apps (vim, nano) manage their own screen cells.
+  if FAltScreen then
   begin
-    if i < Length(FLines) then
+    SetLength(newLines, ARows);
+    SetLength(newWrapped, ARows);
+    for i := 0 to ARows - 1 do
     begin
       SetLength(newLines[i], ACols);
-      if ACols <= Length(FLines[i]) then
-        Move(FLines[i][0], newLines[i][0], ACols * SizeOf(TTermCell))
-      else if Length(FLines[i]) > 0 then
-        Move(FLines[i][0], newLines[i][0], Length(FLines[i]) * SizeOf(TTermCell));
-    end
-    else
-      SetLength(newLines[i], ACols);
+      newWrapped[i] := False;
+      if i < Length(FLines) then
+      begin
+        chunkLen := Min(ACols, Length(FLines[i]));
+        if chunkLen > 0 then
+          Move(FLines[i][0], newLines[i][0], chunkLen * SizeOf(TTermCell));
+      end;
+    end;
+    FLines := newLines;
+    FLinesWrapped := newWrapped;
+    FCols := ACols;
+    FRows := ARows;
+    if FCursorX >= FCols then FCursorX := FCols - 1;
+    if FCursorY >= FRows then FCursorY := FRows - 1;
+    FScrollTop := 0;
+    FScrollBottom := FRows - 1;
+    ResetTabStops();
+    FChanged := True;
+    Exit;
   end;
 
-  FLines := newLines;
+  // Absolute cursor position in the buffer:
+  absCursorX := FCursorX;
+  absCursorY := VisibleTop() + FCursorY;
+  if absCursorY < 0 then absCursorY := 0;
+  if absCursorY >= Length(FLines) then absCursorY := Length(FLines) - 1;
+
+  newCursorLine := -1;
+  newCursorCol := -1;
+
+  // Width reflow:
+  if ACols <> FCols then
+  begin
+    SetLength(newLines, 0);
+    SetLength(newWrapped, 0);
+    idx := 0;
+    while idx < Length(FLines) do
+    begin
+      SetLength(logicalCells, 0);
+      cursorCharOffset := -1;
+      cursorFound := False;
+
+      while idx < Length(FLines) do
+      begin
+        if idx = absCursorY then
+        begin
+          cursorCharOffset := Length(logicalCells) + absCursorX;
+          cursorFound := True;
+        end;
+
+        if (idx < Length(FLines) - 1) and (idx < Length(FLinesWrapped)) and FLinesWrapped[idx] then
+        begin
+          cellCount := Length(FLines[idx]);
+        end
+        else
+        begin
+          cellCount := LineContentLen(FLines[idx]);
+          if cursorFound and (cellCount < absCursorX + 1) and (idx = absCursorY) then
+            cellCount := absCursorX + 1;
+        end;
+
+        currentCellOffset := Length(logicalCells);
+        if cellCount > 0 then
+        begin
+          SetLength(logicalCells, currentCellOffset + cellCount);
+          Move(FLines[idx][0], logicalCells[currentCellOffset], cellCount * SizeOf(TTermCell));
+        end;
+
+        if (idx < Length(FLines) - 1) and (idx < Length(FLinesWrapped)) and FLinesWrapped[idx] then
+          Inc(idx)
+        else
+        begin
+          Inc(idx);
+          Break;
+        end;
+      end;
+
+      if Length(logicalCells) = 0 then
+      begin
+        totalNew := Length(newLines);
+        SetLength(newLines, totalNew + 1);
+        SetLength(newWrapped, totalNew + 1);
+        SetLength(newLines[totalNew], ACols);
+        newWrapped[totalNew] := False;
+        if cursorFound then
+        begin
+          newCursorLine := totalNew;
+          newCursorCol := 0;
+        end;
+      end
+      else
+      begin
+        chunkStart := 0;
+        while chunkStart < Length(logicalCells) do
+        begin
+          chunkLen := Min(ACols, Length(logicalCells) - chunkStart);
+          totalNew := Length(newLines);
+          SetLength(newLines, totalNew + 1);
+          SetLength(newWrapped, totalNew + 1);
+          SetLength(newLines[totalNew], ACols);
+          Move(logicalCells[chunkStart], newLines[totalNew][0], chunkLen * SizeOf(TTermCell));
+
+          if chunkStart + chunkLen < Length(logicalCells) then
+            newWrapped[totalNew] := True
+          else
+            newWrapped[totalNew] := False;
+
+          if cursorFound and (newCursorLine < 0) then
+          begin
+            if (cursorCharOffset >= chunkStart) and
+               ((cursorCharOffset < chunkStart + chunkLen) or (chunkStart + chunkLen >= Length(logicalCells))) then
+            begin
+              newCursorLine := totalNew;
+              newCursorCol := Min(ACols - 1, cursorCharOffset - chunkStart);
+            end;
+          end;
+
+          chunkStart := chunkStart + chunkLen;
+        end;
+      end;
+    end;
+
+    FLines := newLines;
+    FLinesWrapped := newWrapped;
+    if newCursorLine < 0 then
+    begin
+      newCursorLine := Length(FLines) - 1;
+      newCursorCol := 0;
+    end;
+  end
+  else
+  begin
+    newCursorLine := absCursorY;
+    newCursorCol := absCursorX;
+  end;
+
+  // Height adjustment on FLines:
+  bufTotalLines := Length(FLines);
+  if newCursorLine < 0 then newCursorLine := 0;
+  if newCursorLine >= bufTotalLines then newCursorLine := bufTotalLines - 1;
+
+  if bufTotalLines < ARows then
+  begin
+    SetLength(FLines, ARows);
+    SetLength(FLinesWrapped, ARows);
+    for i := bufTotalLines to ARows - 1 do
+    begin
+      SetLength(FLines[i], ACols);
+      FLinesWrapped[i] := False;
+    end;
+    FCursorY := newCursorLine;
+  end
+  else
+  begin
+    availAfter := (bufTotalLines - 1) - newCursorLine;
+    if availAfter > 0 then
+    begin
+      maxTrim := bufTotalLines - Max(ARows, newCursorLine + 1);
+      trimCount := Min(availAfter, maxTrim);
+      while (trimCount > 0) and (LineContentLen(FLines[bufTotalLines - 1]) = 0) do
+      begin
+        Dec(trimCount);
+        Dec(bufTotalLines);
+      end;
+      SetLength(FLines, bufTotalLines);
+      SetLength(FLinesWrapped, bufTotalLines);
+    end;
+
+    FCursorY := newCursorLine - (bufTotalLines - ARows);
+    if FCursorY < 0 then
+      FCursorY := 0
+    else if FCursorY >= ARows then
+      FCursorY := ARows - 1;
+  end;
+
+  FCursorX := Min(ACols - 1, Max(0, newCursorCol));
   FCols := ACols;
   FRows := ARows;
-  if FCursorX >= FCols then FCursorX := FCols - 1;
-  if FCursorY >= FRows then FCursorY := FRows - 1;
   FScrollTop := 0;
   FScrollBottom := FRows - 1;
+  FViewOffset := 0;
   ResetTabStops();
   FChanged := True;
-  if oldTop < 0 then oldTop := 0;
-  if newTopIdx < 0 then newTopIdx := 0;
 end;
 
 function TTerminalEmulator.ViewCell(AViewRow, ACol: Integer): TTermCell;

@@ -32,6 +32,7 @@ type
     procedure TestContainerAndPanelSeparation();
     procedure TestTerminalWidthFollowsWindowResize();
     procedure TestTerminalScrollBarLifecycle();
+    procedure TestWindowResizePreservesOutputAndReflow();
   end;
 
 implementation
@@ -308,6 +309,53 @@ begin
   tab.View.ScrollToEnd();
   AssertEquals('Scroll offset is 0 after ScrollToEnd', 0, tab.View.Screen.ScrollOffset());
   AssertEquals('Scrollbar value returned to max', sb.Max, sb.Value, 0.001);
+end;
+
+procedure TConsoleWindowTest.TestWindowResizePreservesOutputAndReflow();
+var
+  tab: TConsoleTab;
+  initialCols, initialRows, i: Integer;
+  lineText: string;
+begin
+  tab := FWindow.ActiveTab();
+  AssertNotNull('Active tab should exist', tab);
+  AssertNotNull('View should exist', tab.View);
+
+  // Set window to standard size 1000x600
+  FWindow.SetBounds(0, 0, 1000, 600);
+  initialCols := tab.View.TermCols;
+  initialRows := tab.View.TermRows;
+
+  // Feed 20 lines of labeled output followed by a prompt
+  for i := 1 to 20 do
+  begin
+    lineText := Format('Header-%.2d-Content: ', [i]) + StringOfChar(Chr(Ord('A') + (i mod 26)), 60);
+    tab.View.Screen.Feed(lineText + #13#10);
+  end;
+  tab.View.Screen.Feed('user@samarinda:~$ ');
+
+  // Verify prompt is on bottom row
+  AssertTrue('Prompt visible on current screen', Pos('user@samarinda:~$', tab.View.Screen.ViewLineText(tab.View.Screen.CursorY)) > 0);
+
+  // Shrink window height and width significantly (down to 600x350)
+  FWindow.SetBounds(0, 0, 600, 350);
+  AssertTrue('Columns decreased after shrink', tab.View.TermCols < initialCols);
+  AssertTrue('Rows decreased after shrink', tab.View.TermRows < initialRows);
+
+  // Prompt must still be visible on screen at the bottom
+  AssertTrue('Prompt still visible after shrink', Pos('user@samarinda:~$', tab.View.Screen.ViewLineText(tab.View.Screen.CursorY)) > 0);
+
+  // Expand window back up to large size (1200x800)
+  FWindow.SetBounds(0, 0, 1200, 800);
+  AssertTrue('Columns increased after expand', tab.View.TermCols > initialCols);
+  AssertTrue('Rows increased after expand', tab.View.TermRows > initialRows);
+
+  // Output at the top should have returned to the screen!
+  // Header-01 was the first line fed; on a tall screen of 800px height (~45+ rows), Header-01..Header-20 and the prompt must all fit on screen!
+  AssertTrue('First header line returned to screen on expand: ' + tab.View.Screen.ViewLineText(0),
+    Pos('Header-01', tab.View.Screen.ViewLineText(0)) > 0);
+  AssertTrue('Prompt is still present on screen',
+    Pos('user@samarinda:~$', tab.View.Screen.ViewLineText(tab.View.Screen.CursorY)) > 0);
 end;
 
 initialization

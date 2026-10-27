@@ -29,6 +29,8 @@ type
     procedure TestAlternateScreen();
     procedure TestOscTitle();
     procedure TestBracketedPaste();
+    procedure TestResizeWidthReflow();
+    procedure TestResizeHeightShrinkAndExpandPreservation();
   end;
 
 implementation
@@ -193,6 +195,90 @@ begin
 
   FScreen.Feed(#27'[?2004l');
   AssertFalse('Bracketed paste disabled', FScreen.BracketedPaste);
+end;
+
+procedure TVtEmulatorTest.TestResizeWidthReflow();
+var
+  originalText: string;
+  i: Integer;
+begin
+  // Construct 100 characters of pattern '0123456789...'
+  originalText := '';
+  for i := 0 to 99 do
+    originalText := originalText + Chr(Ord('0') + (i mod 10));
+
+  FScreen.Feed(originalText);
+  // On 80 cols: row 0 has first 80 chars, row 1 has remaining 20 chars
+  AssertEquals('Row 0 text at 80 cols', Copy(originalText, 1, 80), FScreen.ViewLineText(0));
+  AssertEquals('Row 1 text at 80 cols', Copy(originalText, 81, 20), FScreen.ViewLineText(1));
+
+  // Resize width down to 50 cols:
+  FScreen.Resize(50, 24);
+  AssertEquals('Cols after resize', 50, FScreen.Cols);
+  AssertEquals('Row 0 text at 50 cols', Copy(originalText, 1, 50), FScreen.ViewLineText(0));
+  AssertEquals('Row 1 text at 50 cols', Copy(originalText, 51, 50), FScreen.ViewLineText(1));
+  AssertEquals('Row 2 text at 50 cols should be blank', '', FScreen.ViewLineText(2));
+
+  // Resize width up to 120 cols: line unwraps back to a single line!
+  FScreen.Resize(120, 24);
+  AssertEquals('Cols after widen', 120, FScreen.Cols);
+  AssertEquals('Row 0 text unwrapped at 120 cols', originalText, FScreen.ViewLineText(0));
+  AssertEquals('Row 1 text at 120 cols should be blank', '', FScreen.ViewLineText(1));
+end;
+
+procedure TVtEmulatorTest.TestResizeHeightShrinkAndExpandPreservation();
+var
+  i: Integer;
+begin
+  // Feed 30 lines on an 80x24 terminal
+  for i := 1 to 30 do
+  begin
+    if i < 30 then
+      FScreen.Feed(Format('Output line %.2d'#13#10, [i]))
+    else
+      FScreen.Feed(Format('Output line %.2d', [i]));
+  end;
+
+  // Initial state: cursor on line 30 at row 23
+  AssertEquals('Initial TotalLines', 30, FScreen.TotalLines());
+  AssertEquals('Initial CursorY', 23, FScreen.CursorY);
+  AssertEquals('Visible top line (row 0)', 'Output line 07', FScreen.ViewLineText(0));
+  AssertEquals('Visible bottom line (row 23)', 'Output line 30', FScreen.ViewLineText(23));
+
+  // Shrink height from 24 down to 12 rows:
+  FScreen.Resize(80, 12);
+  AssertEquals('Rows after shrink', 12, FScreen.Rows);
+  AssertEquals('Total lines must be preserved on shrink', 30, FScreen.TotalLines());
+  AssertEquals('CursorY shifted to bottom row', 11, FScreen.CursorY);
+  AssertEquals('Visible bottom line at 12 rows', 'Output line 30', FScreen.ViewLineText(11));
+  AssertEquals('Visible top line at 12 rows', 'Output line 19', FScreen.ViewLineText(0));
+
+  // Expand height from 12 back to 24 rows:
+  FScreen.Resize(80, 24);
+  AssertEquals('Rows after restore', 24, FScreen.Rows);
+  AssertEquals('Total lines preserved after restore', 30, FScreen.TotalLines());
+  AssertEquals('CursorY restored to row 23', 23, FScreen.CursorY);
+  AssertEquals('Visible bottom line restored', 'Output line 30', FScreen.ViewLineText(23));
+  AssertEquals('Top lines 07..18 returned to screen', 'Output line 07', FScreen.ViewLineText(0));
+
+  // Scroll up 6 lines into scrollback to verify line 01 is intact
+  FScreen.ScrollView(6);
+  AssertEquals('Scrollback line 01 intact', 'Output line 01', FScreen.ViewLineText(0));
+  FScreen.ScrollToBottom();
+
+  // Expand height to 35 rows: all 30 lines now fit on screen!
+  FScreen.Resize(80, 35);
+  AssertEquals('Rows at 35', 35, FScreen.Rows);
+  AssertEquals('CursorY at row 29', 29, FScreen.CursorY);
+  AssertEquals('Top line at row 0 is line 01 without scrolling', 'Output line 01', FScreen.ViewLineText(0));
+  AssertEquals('Line at row 29 is line 30', 'Output line 30', FScreen.ViewLineText(29));
+  AssertEquals('Row 30 is blank', '', FScreen.ViewLineText(30));
+
+  // Shrink back to 24:
+  FScreen.Resize(80, 24);
+  AssertEquals('Total lines still 30', 30, FScreen.TotalLines());
+  AssertEquals('Visible bottom line at row 23', 'Output line 30', FScreen.ViewLineText(23));
+  AssertEquals('Visible top line at row 0', 'Output line 07', FScreen.ViewLineText(0));
 end;
 
 initialization
