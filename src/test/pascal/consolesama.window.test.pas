@@ -33,6 +33,7 @@ type
     procedure TestTerminalWidthFollowsWindowResize();
     procedure TestTerminalScrollBarLifecycle();
     procedure TestWindowResizePreservesOutputAndReflow();
+    procedure TestOddEvenColumnWidthReflowNoCursorShift();
   end;
 
 implementation
@@ -356,6 +357,52 @@ begin
     Pos('Header-01', tab.View.Screen.ViewLineText(0)) > 0);
   AssertTrue('Prompt is still present on screen',
     Pos('user@samarinda:~$', tab.View.Screen.ViewLineText(tab.View.Screen.CursorY)) > 0);
+end;
+
+procedure TConsoleWindowTest.TestOddEvenColumnWidthReflowNoCursorShift();
+var
+  tab: TConsoleTab;
+  cellW, w74, w75: Integer;
+begin
+  tab := FWindow.ActiveTab();
+  AssertNotNull('Active tab should exist', tab);
+  cellW := Round(tab.View.CellWidth);
+
+  // Compute exact window widths for 74 and 75 terminal columns:
+  // termW = availW - 14; cols = Floor(termW / cellW)
+  w74 := 74 * cellW + 14;
+  w75 := 75 * cellW + 14;
+
+  // Set to 75 columns first
+  FWindow.SetBounds(0, 0, w75, 500);
+  AssertEquals('TermCols at w75', 75, tab.View.TermCols);
+
+  // Clear and feed a 74-character prompt line (e.g. 40 chars prompt + 34 chars command)
+  tab.View.Screen.Feed(#27'[2J'#27'[H');
+  tab.View.Screen.Feed('user@box:~/projects/kirana/consolesama$ ls -la /var/log/syslog 12345678901');
+  AssertEquals('Prompt length on 75 cols is 74 chars', 74, tab.View.Screen.CursorX);
+  AssertEquals('Cursor row is 0 on 75 cols', 0, tab.View.Screen.CursorY);
+
+  // Resize window width down to 74 columns (even)
+  FWindow.SetBounds(0, 0, w74, 500);
+  AssertEquals('TermCols at w74', 74, tab.View.TermCols);
+  // Crucial invariant: cursor must NOT jump 4 cells left (to col 70) or clamp to col 73!
+  // At 74 cols, 74 characters fills row 0 (cols 0..73) and wraps cursor to row 1 col 0.
+  AssertEquals('Cursor row at 74 cols wraps to next row', 1, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col at 74 cols is at col 0', 0, tab.View.Screen.CursorX);
+
+  // Resize window width back up to 75 columns (odd)
+  FWindow.SetBounds(0, 0, w75, 500);
+  AssertEquals('TermCols at w75 again', 75, tab.View.TermCols);
+  // Line unwraps cleanly back to row 0, col 74!
+  AssertEquals('Cursor row restored to 0 at 75 cols', 0, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col restored to 74 at 75 cols', 74, tab.View.Screen.CursorX);
+
+  // Resize down to 74 columns again: must wrap consistently without jumping left
+  FWindow.SetBounds(0, 0, w74, 500);
+  AssertEquals('TermCols at w74 second time', 74, tab.View.TermCols);
+  AssertEquals('Cursor row at 74 cols second time', 1, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col at 74 cols second time', 0, tab.View.Screen.CursorX);
 end;
 
 initialization

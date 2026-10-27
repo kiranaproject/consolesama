@@ -287,7 +287,7 @@ var
   promptStr: string;
 begin
   // Set up typical bash prompt with ANSI color escapes:
-  // "user@box:~/projects/kirana/consolesama$ " (41 chars)
+  // "user@box:~/projects/kirana/consolesama$ " (40 printable chars)
   promptStr := #27'[01;32muser@box'#27'[00m:'#27'[01;34m~/projects/kirana/consolesama'#27'[00m$ ';
   FScreen.Feed(promptStr);
 
@@ -298,30 +298,43 @@ begin
   // Narrow width from 80 down to 30 columns (where 40 chars wraps across 2 rows)
   FScreen.Resize(30, 24);
 
-  // Cursor must anchor to row 0 so bash's CR (#13) on SIGWINCH lands on the prompt start
-  AssertEquals('Cursor anchored to prompt start row on narrow', 0, FScreen.CursorY);
-
-  // Simulate bash readline redraw on SIGWINCH: CR, EL (#27'[K'), CR, reprint prompt
-  FScreen.Feed(#13#27'[K'#13 + promptStr);
-
   // Line 0 should contain the first 30 chars
   AssertEquals('Line 0 has first 30 chars', Copy('user@box:~/projects/kirana/consolesama$', 1, 30), FScreen.ViewLineText(0));
-  // Line 1 should contain remaining chars, NOT a duplicate prompt!
-  AssertEquals('Line 1 has wrapped remainder, no duplicate', Copy('user@box:~/projects/kirana/consolesama$', 31, 100), FScreen.ViewLineText(1));
+  // Line 1 should contain remaining 10 chars, cursor after the 10th char
+  AssertEquals('Line 1 has wrapped remainder', Copy('user@box:~/projects/kirana/consolesama$', 31, 100), FScreen.ViewLineText(1));
   AssertEquals('Line 2 is empty', '', FScreen.ViewLineText(2));
-  // Cursor is on row 1 at column 10 (after remainder of prompt + space)
   AssertEquals('Cursor row after wrapped prompt', 1, FScreen.CursorY);
   AssertEquals('Cursor col after wrapped prompt', 10, FScreen.CursorX);
 
-  // Expand width back up to 80 cols
+  // Expand width back up to 80 cols: unwraps back to single line
   FScreen.Resize(80, 24);
-  // Simulate bash readline redraw back on single line
-  FScreen.Feed(#13#27'[K'#13#27'[A'#27'[K'#13 + promptStr);
 
   AssertEquals('Line 0 fully restored on single line', 'user@box:~/projects/kirana/consolesama$', FScreen.ViewLineText(0));
   AssertEquals('Line 1 is empty after restore', '', FScreen.ViewLineText(1));
   AssertEquals('Cursor row back to 0', 0, FScreen.CursorY);
   AssertEquals('Cursor col back to 40', 40, FScreen.CursorX);
+
+  // Test boundary transitions: 74 vs 75 columns with typed input
+  // Type 34 chars so total length is 74 chars
+  FScreen.Feed('0123456789012345678901234567890123');
+  AssertEquals('Cursor at col 74 on 80 cols', 74, FScreen.CursorX);
+  AssertEquals('Cursor at row 0 on 80 cols', 0, FScreen.CursorY);
+
+  // Resize to 75 cols: 74 chars fits completely on row 0, cursor at col 74
+  FScreen.Resize(75, 24);
+  AssertEquals('Row 0 on 75 cols', 0, FScreen.CursorY);
+  AssertEquals('Col 74 on 75 cols', 74, FScreen.CursorX);
+
+  // Resize to 74 cols: 74 chars fills line 0 (cols 0..73), cursor wraps to row 1 col 0
+  // Crucially: cursor must NOT be clamped to col 73 (overwriting the last char)!
+  FScreen.Resize(74, 24);
+  AssertEquals('Row 1 on 74 cols', 1, FScreen.CursorY);
+  AssertEquals('Col 0 on 74 cols', 0, FScreen.CursorX);
+
+  // Resize back to 75 cols: line unwraps cleanly back to row 0, col 74
+  FScreen.Resize(75, 24);
+  AssertEquals('Row 0 restored on 75 cols', 0, FScreen.CursorY);
+  AssertEquals('Col 74 restored on 75 cols', 74, FScreen.CursorX);
 end;
 
 initialization

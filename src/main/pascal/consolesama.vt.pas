@@ -1281,6 +1281,7 @@ var
   newWrapped: array of Boolean;
   totalNew, bufTotalLines, availAfter, maxTrim, trimCount: Integer;
   logicalPhysicalLines, firstNewChunk: Integer;
+  chunkIdx, totalChunks, neededChunks, cursorRelChunk, cursorRelCol: Integer;
 
   function LineContentLen(const ALine: TTermLine): Integer;
   var
@@ -1388,51 +1389,50 @@ begin
       end;
 
       if Length(logicalCells) = 0 then
+        neededChunks := 1
+      else
+        neededChunks := (Length(logicalCells) + ACols - 1) div ACols;
+
+      if cursorFound then
       begin
+        cursorRelChunk := cursorCharOffset div ACols;
+        cursorRelCol := cursorCharOffset mod ACols;
+      end
+      else
+      begin
+        cursorRelChunk := -1;
+        cursorRelCol := 0;
+      end;
+
+      if cursorFound and (cursorRelChunk >= neededChunks) then
+        totalChunks := cursorRelChunk + 1
+      else
+        totalChunks := neededChunks;
+
+      for chunkIdx := 0 to totalChunks - 1 do
+      begin
+        chunkStart := chunkIdx * ACols;
+        if chunkStart < Length(logicalCells) then
+          chunkLen := Min(ACols, Length(logicalCells) - chunkStart)
+        else
+          chunkLen := 0;
+
         totalNew := Length(newLines);
         SetLength(newLines, totalNew + 1);
         SetLength(newWrapped, totalNew + 1);
         SetLength(newLines[totalNew], ACols);
-        newWrapped[totalNew] := False;
-        if cursorFound then
-        begin
-          newCursorLine := totalNew;
-          newCursorCol := Min(ACols - 1, absCursorX);
-        end;
-      end
-      else
-      begin
-        chunkStart := 0;
-        while chunkStart < Length(logicalCells) do
-        begin
-          chunkLen := Min(ACols, Length(logicalCells) - chunkStart);
-          totalNew := Length(newLines);
-          SetLength(newLines, totalNew + 1);
-          SetLength(newWrapped, totalNew + 1);
-          SetLength(newLines[totalNew], ACols);
+        if chunkLen > 0 then
           Move(logicalCells[chunkStart], newLines[totalNew][0], chunkLen * SizeOf(TTermCell));
 
-          if chunkStart + chunkLen < Length(logicalCells) then
-            newWrapped[totalNew] := True
-          else
-            newWrapped[totalNew] := False;
+        if chunkIdx < totalChunks - 1 then
+          newWrapped[totalNew] := True
+        else
+          newWrapped[totalNew] := False;
 
-          if cursorFound and (newCursorLine < 0) then
-          begin
-            if (logicalPhysicalLines = 1) and (ACols < FCols) then
-            begin
-              newCursorLine := firstNewChunk;
-              newCursorCol := Min(ACols - 1, absCursorX);
-            end
-            else if (cursorCharOffset >= chunkStart) and
-               ((cursorCharOffset < chunkStart + chunkLen) or (chunkStart + chunkLen >= Length(logicalCells))) then
-            begin
-              newCursorLine := totalNew;
-              newCursorCol := Min(ACols - 1, cursorCharOffset - chunkStart);
-            end;
-          end;
-
-          chunkStart := chunkStart + chunkLen;
+        if cursorFound and (newCursorLine < 0) and (chunkIdx = cursorRelChunk) then
+        begin
+          newCursorLine := totalNew;
+          newCursorCol := cursorRelCol;
         end;
       end;
     end;
