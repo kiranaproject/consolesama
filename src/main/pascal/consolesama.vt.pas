@@ -1280,6 +1280,7 @@ var
   newLines: array of TTermLine;
   newWrapped: array of Boolean;
   totalNew, bufTotalLines, availAfter, maxTrim, trimCount: Integer;
+  logicalPhysicalLines, firstNewChunk: Integer;
 
   function LineContentLen(const ALine: TTermLine): Integer;
   var
@@ -1287,7 +1288,7 @@ var
   begin
     for k := High(ALine) downto 0 do
     begin
-      if (ALine[k].Code <> 0) and (ALine[k].Code <> 32) then
+      if ALine[k].Code <> 0 then
         Exit(k + 1);
       if ALine[k].Attr.BG.Kind <> tckDefault then
         Exit(k + 1);
@@ -1349,9 +1350,12 @@ begin
       SetLength(logicalCells, 0);
       cursorCharOffset := -1;
       cursorFound := False;
+      logicalPhysicalLines := 0;
+      firstNewChunk := Length(newLines);
 
       while idx < Length(FLines) do
       begin
+        Inc(logicalPhysicalLines);
         if idx = absCursorY then
         begin
           cursorCharOffset := Length(logicalCells) + absCursorX;
@@ -1365,8 +1369,6 @@ begin
         else
         begin
           cellCount := LineContentLen(FLines[idx]);
-          if cursorFound and (cellCount < absCursorX + 1) and (idx = absCursorY) then
-            cellCount := absCursorX + 1;
         end;
 
         currentCellOffset := Length(logicalCells);
@@ -1395,7 +1397,7 @@ begin
         if cursorFound then
         begin
           newCursorLine := totalNew;
-          newCursorCol := 0;
+          newCursorCol := Min(ACols - 1, absCursorX);
         end;
       end
       else
@@ -1417,7 +1419,12 @@ begin
 
           if cursorFound and (newCursorLine < 0) then
           begin
-            if (cursorCharOffset >= chunkStart) and
+            if (logicalPhysicalLines = 1) and (ACols < FCols) then
+            begin
+              newCursorLine := firstNewChunk;
+              newCursorCol := Min(ACols - 1, absCursorX);
+            end
+            else if (cursorCharOffset >= chunkStart) and
                ((cursorCharOffset < chunkStart + chunkLen) or (chunkStart + chunkLen >= Length(logicalCells))) then
             begin
               newCursorLine := totalNew;
@@ -1489,6 +1496,7 @@ begin
   FScrollTop := 0;
   FScrollBottom := FRows - 1;
   FViewOffset := 0;
+  FWrapPending := False;
   ResetTabStops();
   FChanged := True;
 end;

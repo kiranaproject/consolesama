@@ -31,6 +31,7 @@ type
     procedure TestBracketedPaste();
     procedure TestResizeWidthReflow();
     procedure TestResizeHeightShrinkAndExpandPreservation();
+    procedure TestPromptResizeNoDuplicateOrJumpingCursor();
   end;
 
 implementation
@@ -279,6 +280,48 @@ begin
   AssertEquals('Total lines still 30', 30, FScreen.TotalLines());
   AssertEquals('Visible bottom line at row 23', 'Output line 30', FScreen.ViewLineText(23));
   AssertEquals('Visible top line at row 0', 'Output line 07', FScreen.ViewLineText(0));
+end;
+
+procedure TVtEmulatorTest.TestPromptResizeNoDuplicateOrJumpingCursor();
+var
+  promptStr: string;
+begin
+  // Set up typical bash prompt with ANSI color escapes:
+  // "user@box:~/projects/kirana/consolesama$ " (41 chars)
+  promptStr := #27'[01;32muser@box'#27'[00m:'#27'[01;34m~/projects/kirana/consolesama'#27'[00m$ ';
+  FScreen.Feed(promptStr);
+
+  AssertEquals('Initial cursor row', 0, FScreen.CursorY);
+  AssertEquals('Initial cursor col', 40, FScreen.CursorX);
+  AssertEquals('Rendered prompt text', 'user@box:~/projects/kirana/consolesama$', FScreen.ViewLineText(0));
+
+  // Narrow width from 80 down to 30 columns (where 40 chars wraps across 2 rows)
+  FScreen.Resize(30, 24);
+
+  // Cursor must anchor to row 0 so bash's CR (#13) on SIGWINCH lands on the prompt start
+  AssertEquals('Cursor anchored to prompt start row on narrow', 0, FScreen.CursorY);
+
+  // Simulate bash readline redraw on SIGWINCH: CR, EL (#27'[K'), CR, reprint prompt
+  FScreen.Feed(#13#27'[K'#13 + promptStr);
+
+  // Line 0 should contain the first 30 chars
+  AssertEquals('Line 0 has first 30 chars', Copy('user@box:~/projects/kirana/consolesama$', 1, 30), FScreen.ViewLineText(0));
+  // Line 1 should contain remaining chars, NOT a duplicate prompt!
+  AssertEquals('Line 1 has wrapped remainder, no duplicate', Copy('user@box:~/projects/kirana/consolesama$', 31, 100), FScreen.ViewLineText(1));
+  AssertEquals('Line 2 is empty', '', FScreen.ViewLineText(2));
+  // Cursor is on row 1 at column 10 (after remainder of prompt + space)
+  AssertEquals('Cursor row after wrapped prompt', 1, FScreen.CursorY);
+  AssertEquals('Cursor col after wrapped prompt', 10, FScreen.CursorX);
+
+  // Expand width back up to 80 cols
+  FScreen.Resize(80, 24);
+  // Simulate bash readline redraw back on single line
+  FScreen.Feed(#13#27'[K'#13#27'[A'#27'[K'#13 + promptStr);
+
+  AssertEquals('Line 0 fully restored on single line', 'user@box:~/projects/kirana/consolesama$', FScreen.ViewLineText(0));
+  AssertEquals('Line 1 is empty after restore', '', FScreen.ViewLineText(1));
+  AssertEquals('Cursor row back to 0', 0, FScreen.CursorY);
+  AssertEquals('Cursor col back to 40', 40, FScreen.CursorX);
 end;
 
 initialization
