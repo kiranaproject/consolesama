@@ -8,8 +8,8 @@ unit ConsoleSama.Window.Test;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
-  ftpas, ftpas.api, ftpas.types, ftpas.widget,
+  Classes, SysUtils, Math, fpcunit, testregistry,
+  ftpas, ftpas.api, ftpas.types, ftpas.widget, ftpas.font,
   ConsoleSama.Ftml.Res,
   ConsoleSama.Terminal,
   ConsoleSama.Window;
@@ -26,6 +26,7 @@ type
     procedure TestTabManagement();
     procedure TestMainMenuPositionOnResize();
     procedure TestTerminalSelectionLifecycle();
+    procedure TestTerminalFontConfiguration();
   end;
 
 implementation
@@ -64,6 +65,40 @@ end;
 procedure TConsoleWindowTest.TestTabManagement();
 begin
   AssertEquals('Initial tab count', 1, FWindow.Notebook.PageCount);
+end;
+
+procedure TConsoleWindowTest.TestTerminalFontConfiguration();
+var
+  term: TConsoleTerminalView;
+  advI, advW, advM: Double;
+  initialSize: Integer;
+begin
+  term := FWindow.ActiveTerminal();
+  AssertNotNull('Active terminal should exist', term);
+  AssertTrue('Terminal font ref should be valid', term.FontRef.Valid);
+
+  // Verify monospace font family contains 'Ubuntu Mono' or 'Mono'
+  AssertTrue('Font family should be fixed-width mono: ' + term.FontFamily,
+    (Pos('Mono', term.FontFamily) > 0) or (Pos('mono', term.FontFamily) > 0));
+
+  // Verify fixed width: character advances for 'i', 'W', 'm' must be equal
+  advI := term.FontRef.AsciiAdvance('i');
+  advW := term.FontRef.AsciiAdvance('W');
+  advM := term.FontRef.AsciiAdvance('m');
+
+  AssertEquals('Monospace advance for i equals W', advI, advW, 0.001);
+  AssertEquals('Monospace advance for m equals W', advM, advW, 0.001);
+  AssertEquals('Cell width matches font advance', Ceil(advW), Round(term.CellWidth));
+
+  // Test Zoom retention of font family
+  initialSize := term.FontSize;
+  term.Zoom(2);
+  AssertEquals('Zoom in increments font size by 2', initialSize + 2, term.FontSize);
+  AssertTrue('Font family preserved after zoom', (Pos('Mono', term.FontDesc) > 0));
+
+  term.ResetZoom();
+  AssertEquals('ResetZoom restores base font size', term.BaseFontSize, term.FontSize);
+  AssertEquals('Font size restored to initial', initialSize, term.FontSize);
 end;
 
 procedure TConsoleWindowTest.TestMainMenuPositionOnResize();

@@ -8,13 +8,17 @@ unit ConsoleSama.Terminal;
 interface
 
 uses
-  Classes, SysUtils, Math,
+  Classes, SysUtils, Math, Process,
   ftpas, ftpas.types, ftpas.creative, ftpas.canvas, ftpas.font, ftpas.widget,
   ConsoleSama.Pty, ConsoleSama.Vt, ConsoleSama.Keys;
 
 const
-  DefaultFontDesc = 'Monospace 12';
+  DefaultFontFamily = 'Ubuntu Mono';
+  DefaultFontSize   = 13;
+  DefaultFontDesc   = 'Ubuntu Mono 13';
 
+function  GetDefaultTerminalFont(): string;
+procedure ParseTerminalFontDesc(const ADesc: string; out AFamily: string; out ASize: Integer);
 function  MakeRGB(AValue: LongWord): TTermColor;
 function  MakeIndexed(AValue: LongWord): TTermColor;
 function  MakeDefaultColor(): TTermColor;
@@ -30,8 +34,10 @@ type
     FPTY: TTerminalPTY;
     FScreen: TTerminalEmulator;
     FFont: TFtFontRef;
+    FFontFamily: string;
     FFontDesc: string;
     FFontSize: Integer;
+    FBaseFontSize: Integer;
     FCols: Integer;
     FRows: Integer;
     FCellW: Double;
@@ -81,13 +87,16 @@ type
     procedure ScrollPage(ADelta: Integer);
     procedure ScrollToEnd();
     procedure Zoom(ADelta: Integer);
+    procedure ResetZoom();
     procedure ShowExited();
 
     property PTY: TTerminalPTY read FPTY;
     property Screen: TTerminalEmulator read FScreen;
     property FontRef: TFtFontRef read FFont;
+    property FontFamily: string read FFontFamily;
     property FontDesc: string read FFontDesc;
     property FontSize: Integer read FFontSize;
+    property BaseFontSize: Integer read FBaseFontSize;
     property TermCols: Integer read FCols;
     property TermRows: Integer read FRows;
     property CellWidth: Double read FCellW;
@@ -132,13 +141,71 @@ begin
   Result.Value := 0;
 end;
 
+function GetDefaultTerminalFont(): string;
+var
+  outStr: string;
+begin
+  outStr := '';
+  if RunCommand('gsettings', ['get', 'org.gnome.desktop.interface', 'monospace-font-name'], outStr) then
+  begin
+    outStr := Trim(outStr);
+    if (Length(outStr) >= 2) and (outStr[1] in ['''', '"']) and (outStr[Length(outStr)] = outStr[1]) then
+      outStr := Copy(outStr, 2, Length(outStr) - 2);
+    if outStr <> '' then
+      Exit(outStr);
+  end;
+
+  if RunCommand('gsettings', ['get', 'org.mate.interface', 'monospace-font-name'], outStr) then
+  begin
+    outStr := Trim(outStr);
+    if (Length(outStr) >= 2) and (outStr[1] in ['''', '"']) and (outStr[Length(outStr)] = outStr[1]) then
+      outStr := Copy(outStr, 2, Length(outStr) - 2);
+    if outStr <> '' then
+      Exit(outStr);
+  end;
+
+  if FileExists('/usr/share/fonts/truetype/ubuntu/UbuntuMono[wght].ttf') or
+     FileExists('/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf') then
+    Exit('Ubuntu Mono 13');
+
+  Result := DefaultFontDesc;
+end;
+
+procedure ParseTerminalFontDesc(const ADesc: string; out AFamily: string; out ASize: Integer);
+var
+  lastSpace, val: Integer;
+  sizePart: string;
+begin
+  AFamily := DefaultFontFamily;
+  ASize := DefaultFontSize;
+  if ADesc = '' then Exit;
+
+  lastSpace := LastDelimiter(' ', ADesc);
+  if lastSpace > 0 then
+  begin
+    sizePart := Copy(ADesc, lastSpace + 1, Length(ADesc));
+    if TryStrToInt(sizePart, val) and (val > 0) then
+    begin
+      AFamily := Trim(Copy(ADesc, 1, lastSpace - 1));
+      ASize := val;
+      Exit;
+    end;
+  end;
+  AFamily := ADesc;
+end;
+
 constructor TConsoleTerminalView.Create(AParent: TFtWidget; AX, AY, AW, AH: Integer;
   const AFontDesc: string);
 begin
   inherited Create(AParent, AX, AY, AW, AH);
-  FFontDesc := AFontDesc;
-  FFontSize := 12;
-  FFont := TFtFontRef.Create(AFontDesc);
+  if AFontDesc <> '' then
+    FFontDesc := AFontDesc
+  else
+    FFontDesc := GetDefaultTerminalFont();
+
+  ParseTerminalFontDesc(FFontDesc, FFontFamily, FFontSize);
+  FBaseFontSize := FFontSize;
+  FFont := TFtFontRef.Create(FFontDesc);
   FScreen := TTerminalEmulator.Create(80, 24);
   FPTY := nil;
   FCols := 80;
@@ -626,12 +693,26 @@ end;
 procedure TConsoleTerminalView.Zoom(ADelta: Integer);
 begin
   FFontSize := Max(6, Min(36, FFontSize + ADelta));
-  FFontDesc := Format('Monospace %d', [FFontSize]);
+  FFontDesc := Format('%s %d', [FFontFamily, FFontSize]);
   FreeAndNil(FFont);
   FFont := TFtFontRef.Create(FFontDesc);
   MeasureFont();
   RecomputeGrid();
   Invalidate();
+end;
+
+procedure TConsoleTerminalView.ResetZoom();
+begin
+  if FFontSize <> FBaseFontSize then
+  begin
+    FFontSize := FBaseFontSize;
+    FFontDesc := Format('%s %d', [FFontFamily, FFontSize]);
+    FreeAndNil(FFont);
+    FFont := TFtFontRef.Create(FFontDesc);
+    MeasureFont();
+    RecomputeGrid();
+    Invalidate();
+  end;
 end;
 
 initialization

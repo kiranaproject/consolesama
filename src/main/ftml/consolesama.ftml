@@ -36,8 +36,9 @@ Rectangle {
 
     Menu {
       title: "View";
-      MenuItem { id: zoomInItem;   text: "Zoom In";        shortcut: "Ctrl+Plus"; }
-      MenuItem { id: zoomOutItem;  text: "Zoom Out";       shortcut: "Ctrl+Minus"; }
+      MenuItem { id: zoomInItem;    text: "Zoom In";        shortcut: "Ctrl+Plus"; }
+      MenuItem { id: zoomOutItem;   text: "Zoom Out";       shortcut: "Ctrl+Minus"; }
+      MenuItem { id: zoomResetItem; text: "Normal Size";    shortcut: "Ctrl+0"; }
       Separator { }
       MenuItem { id: scrollUpItem;   text: "Scroll Up";    shortcut: "Shift+PageUp"; }
       MenuItem { id: scrollDownItem; text: "Scroll Down";  shortcut: "Shift+PageDown"; }

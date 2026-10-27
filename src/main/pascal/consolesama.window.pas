@@ -59,6 +59,7 @@ type
     procedure MenuSelectAll(Sender: TObject);
     procedure MenuZoomIn(Sender: TObject);
     procedure MenuZoomOut(Sender: TObject);
+    procedure MenuZoomReset(Sender: TObject);
     procedure MenuScrollUp(Sender: TObject);
     procedure MenuScrollDown(Sender: TObject);
     procedure MenuScrollEnd(Sender: TObject);
@@ -182,6 +183,7 @@ begin
   HookMenu('selectAllItem', @MenuSelectAll);
   HookMenu('zoomInItem', @MenuZoomIn);
   HookMenu('zoomOutItem', @MenuZoomOut);
+  HookMenu('zoomResetItem', @MenuZoomReset);
   HookMenu('scrollUpItem', @MenuScrollUp);
   HookMenu('scrollDownItem', @MenuScrollDown);
   HookMenu('scrollEndItem', @MenuScrollEnd);
@@ -559,7 +561,7 @@ begin
   else if (AKeySym = Ord('0')) or (AKeySym = XK_KP_0) then
   begin
     tab := ActiveTab();
-    if tab <> nil then tab.View.Zoom(12 - tab.View.FontSize);
+    if tab <> nil then tab.View.ResetZoom();
     Result := True;
   end
   else if ch = 'Q' then
@@ -629,6 +631,14 @@ var
 begin
   tab := ActiveTab();
   if tab <> nil then tab.View.Zoom(-1);
+end;
+
+procedure TConsoleSamaWindow.MenuZoomReset(Sender: TObject);
+var
+  tab: TConsoleTab;
+begin
+  tab := ActiveTab();
+  if tab <> nil then tab.View.ResetZoom();
 end;
 
 procedure TConsoleSamaWindow.MenuScrollUp(Sender: TObject);
