@@ -116,6 +116,7 @@ begin
   AssertNotNull('Status bar widget should exist', sb);
   st := FWindow.FindWidget('statusText');
   AssertNotNull('Status text widget should exist', st);
+  AssertFalse('Status bar is hidden unless --debug is passed', sb.Visible);
 
   // Status bar should be docked to the bottom from the very start, without any manual window resize
   AssertEquals('Status bar X is 0', 0, sb.X);
@@ -386,17 +387,19 @@ begin
   // Resize window width down to 74 columns (even)
   FWindow.SetBounds(0, 0, w74, 500);
   AssertEquals('TermCols at w74', 74, tab.View.TermCols);
-  // Active cursor row is preserved for shell readline redraw, avoiding desync and duplication
-  AssertEquals('Cursor row at 74 cols preserved on row 0', 0, tab.View.Screen.CursorY);
+  // With a live shell the active line is left in place (truncated to the new
+  // width) so the shell's SIGWINCH redraw starts from a consistent row. Until
+  // that redraw arrives the cursor is clamped to the last column of the line.
+  AssertEquals('Cursor row at 74 cols stays on row 0', 0, tab.View.Screen.CursorY);
   AssertEquals('Cursor col at 74 cols clamped to col 73', 73, tab.View.Screen.CursorX);
 
   // Resize window width back up to 75 columns (odd)
   FWindow.SetBounds(0, 0, w75, 500);
   AssertEquals('TermCols at w75 again', 75, tab.View.TermCols);
-  AssertEquals('Cursor row on row 0 at 75 cols', 0, tab.View.Screen.CursorY);
-  AssertEquals('Cursor col stays at 73 on w75 without PTY redraw', 73, tab.View.Screen.CursorX);
+  AssertEquals('Cursor row restored to 0 at 75 cols', 0, tab.View.Screen.CursorY);
+  AssertEquals('Cursor col at 75 cols', 73, tab.View.Screen.CursorX);
 
-  // Resize down to 74 columns again: must preserve row 0 without shift
+  // Resize down to 74 columns again: must not jump further left
   FWindow.SetBounds(0, 0, w74, 500);
   AssertEquals('TermCols at w74 second time', 74, tab.View.TermCols);
   AssertEquals('Cursor row at 74 cols second time', 0, tab.View.Screen.CursorY);

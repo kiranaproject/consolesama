@@ -48,7 +48,7 @@ Container {
 
     Menu {
       title: "Help";
-      MenuItem { id: aboutItem; text: "About consolesama"; }
+      MenuItem { id: aboutItem; text: "About Samarinda Console"; }
     }
   }
 
@@ -76,7 +76,7 @@ Container {
       anchors.leftMargin: 8;
       anchors.rightMargin: 8;
       height: 20;
-      text: "consolesama — ready";
+      text: "Console — ready";
       font: "Sans 9";
     }
 

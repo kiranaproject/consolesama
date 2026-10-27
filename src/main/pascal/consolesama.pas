@@ -13,8 +13,19 @@ uses
 
 var
   MainWindow: TConsoleSamaWindow;
+
+function DebugRequested(): Boolean;
+var
+  i: Integer;
 begin
-  MainWindow := TConsoleSamaWindow.Create();
+  for i := 1 to ParamCount() do
+    if (ParamStr(i) = '--debug') or (ParamStr(i) = '-d') then
+      Exit(True);
+  Result := False;
+end;
+
+begin
+  MainWindow := TConsoleSamaWindow.Create(DebugRequested());
   try
     MainWindow.Show();
     FtApp().Run();

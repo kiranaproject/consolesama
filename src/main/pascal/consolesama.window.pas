@@ -27,6 +27,7 @@ type
   TConsoleSamaWindow = class(TFtFTMLForm)
   private
     FNotebook: TFtNotebook;
+    FStatusBar: TFtWidget;
     FStatusText: TFtLabel;
     FStatusRight: TFtLabel;
     FTabs: TList;
@@ -35,6 +36,7 @@ type
     FLastPump: QWord;
     FLastStatus: QWord;
     FClosing: Boolean;
+    FDebugMode: Boolean;
 
     procedure SetupUI();
     procedure DumpLayout(const ATag: string);
@@ -69,13 +71,14 @@ type
   protected
     procedure DoResize(ANewWidth, ANewHeight: Integer); override;
   public
-    constructor Create(); reintroduce;
+    constructor Create(ADebugMode: Boolean = False); reintroduce;
     destructor Destroy(); override;
 
     procedure PumpTicks();
     function  ActiveTab(): TConsoleTab;
     function  ActiveTerminal(): TConsoleTerminalView;
     property Notebook: TFtNotebook read FNotebook;
+    property DebugMode: Boolean read FDebugMode;
   end;
 
 // Spawn another consolesama process (used by File ▸ New Window).
@@ -88,6 +91,7 @@ uses
 
 var
   GCurrentWindow: TConsoleSamaWindow = nil;
+  GDebugMode: Boolean = False;
 
 // ----------------------------- Tick plumbing -----------------------------
 
@@ -101,7 +105,7 @@ procedure SpawnNewConsolesama();
 var
   pid: TPid;
   exe: string;
-  argv: array[0..1] of PChar;
+  argv: array[0..2] of PChar;
 begin
   exe := ParamStr(0);
   if exe = '' then Exit;
@@ -109,7 +113,13 @@ begin
   if pid = 0 then
   begin
     argv[0] := PChar(exe);
-    argv[1] := nil;
+    if GDebugMode then
+    begin
+      argv[1] := '--debug';
+      argv[2] := nil;
+    end
+    else
+      argv[1] := nil;
     fpExecv(PChar(exe), @argv[0]);
     Halt(127);
   end;
@@ -117,15 +127,17 @@ end;
 
 // ------------------------------- Window ----------------------------------
 
-constructor TConsoleSamaWindow.Create();
+constructor TConsoleSamaWindow.Create(ADebugMode: Boolean);
 begin
   inherited Create(980, 660, 'consolesama', 'TConsoleSamaWindow');
+  FDebugMode := ADebugMode;
   FTabs := TList.Create();
   FActiveIndex := -1;
   FTabCounter := 0;
   FLastPump := 0;
   FLastStatus := 0;
   FClosing := False;
+  GDebugMode := ADebugMode;
   GCurrentWindow := Self;
 
   SetupUI();
@@ -162,12 +174,19 @@ begin
   w := FindWidget('tabHost');
   if w is TFtNotebook then
     FNotebook := TFtNotebook(w);
+  w := FindWidget('statusBar');
+  if w <> nil then
+    FStatusBar := w;
   w := FindWidget('statusText');
   if w is TFtLabel then
     FStatusText := TFtLabel(w);
   w := FindWidget('statusRight');
   if w is TFtLabel then
     FStatusRight := TFtLabel(w);
+
+  // The status bar is a developer aid: hidden unless --debug was passed.
+  if (FStatusBar <> nil) and (not FDebugMode) then
+    FStatusBar.Hide();
 
   if FNotebook = nil then
   begin
@@ -353,6 +372,12 @@ var
 begin
   if FNotebook = nil then Exit;
 
+  // Without the debug status bar the notebook claims the space down to the
+  // window's bottom edge.
+  if not FDebugMode then
+    FNotebook.SetBounds(FNotebook.X, FNotebook.Y, FNotebook.Width,
+      Height - FNotebook.Y);
+
   availW := FNotebook.Width;
   availH := FNotebook.Height - Round(FNotebook.TabHeight) - 2;
   if availW < 100 then availW := 980;
@@ -456,7 +481,7 @@ begin
   if FStatusText <> nil then
   begin
     if tab = nil then
-      FStatusText.Text := 'consolesama'
+      FStatusText.Text := 'Console'
     else
       FStatusText.Text := Format('%s — %dx%d', [tab.Title, tab.View.TermCols, tab.View.TermRows]);
   end;
@@ -476,9 +501,9 @@ var
 begin
   tab := ActiveTab();
   if (tab <> nil) and tab.CustomTitle then
-    Title := tab.Title + ' — consolesama'
+    Title := tab.Title + ' — Samarinda Console'
   else
-    Title := 'consolesama';
+    Title := 'Samarinda Console';
 end;
 
 procedure TConsoleSamaWindow.HandleTerminalTitle(Sender: TObject; const ATitle: string);
@@ -731,9 +756,9 @@ end;
 
 procedure TConsoleSamaWindow.MenuAbout(Sender: TObject);
 begin
-  TFtMessageDialog.ShowInfo('About consolesama',
-    'a terminal built with ftpas',
-    'consolesama is a MATE Terminal-style console built on the Floria Toolkit ' +
+  TFtMessageDialog.ShowInfo('About Samarinda Console',
+    'A terminal built with ftpas',
+    'Samarinda Console is a terminal console built on the Floria Toolkit ' +
     'Pascal binding (ftpas), with its window chrome modelled in FTML and ' +
     'embedded into the executable.');
 end;
