@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, Math, fpcunit, testregistry,
-  ftpas, ftpas.api, ftpas.types, ftpas.widget, ftpas.font,
+  ftpas, ftpas.api, ftpas.types, ftpas.app, ftpas.widget, ftpas.layouts, ftpas.font,
   ConsoleSama.Ftml.Res,
   ConsoleSama.Terminal,
   ConsoleSama.Window;
@@ -28,6 +28,8 @@ type
     procedure TestTerminalSelectionLifecycle();
     procedure TestTerminalFontConfiguration();
     procedure TestStatusBarInitialPosition();
+    procedure TestThemeColorAdaptation();
+    procedure TestContainerAndPanelSeparation();
   end;
 
 implementation
@@ -188,6 +190,49 @@ begin
   term.HandleMouseUp(nil, 300, 300, 1);
   AssertFalse('After click release, no selection', term.HasSelection);
   AssertFalse('Not selecting', term.Selecting);
+end;
+
+procedure TConsoleWindowTest.TestThemeColorAdaptation();
+var
+  term: TConsoleTerminalView;
+  origDark: Boolean;
+begin
+  term := FWindow.ActiveTerminal();
+  AssertNotNull('Active terminal should exist', term);
+
+  origDark := FtApp().DarkMode;
+  try
+    // 1. Light mode test
+    FtApp().DarkMode := False;
+    term.RefreshThemeColors();
+    AssertFalse('Terminal should be in light mode', term.IsDark);
+    AssertEquals('Light mode background is white', $00FFFFFF, term.DefaultBackground.Value);
+    AssertEquals('Light mode foreground is slate', $001E293B, term.DefaultForeground.Value);
+
+    // 2. Dark mode test
+    FtApp().DarkMode := True;
+    term.RefreshThemeColors();
+    AssertTrue('Terminal should be in dark mode', term.IsDark);
+    AssertEquals('Dark mode background is dark navy', $00171A21, term.DefaultBackground.Value);
+    AssertEquals('Dark mode foreground is light slate', $00D8DEE9, term.DefaultForeground.Value);
+  finally
+    FtApp().DarkMode := origDark;
+    term.RefreshThemeColors();
+  end;
+end;
+
+procedure TConsoleWindowTest.TestContainerAndPanelSeparation();
+var
+  rootW, statusW: TFtWidget;
+begin
+  rootW := FWindow.FindWidget('root');
+  AssertNotNull('Root container should exist', rootW);
+  AssertTrue('Root is TFtContainer', rootW is TFtContainer);
+  AssertFalse('Root is NOT TFtPanel', rootW is TFtPanel);
+
+  statusW := FWindow.FindWidget('statusBar');
+  AssertNotNull('Status bar widget should exist', statusW);
+  AssertTrue('Status bar is TFtPanel', statusW is TFtPanel);
 end;
 
 initialization

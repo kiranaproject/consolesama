@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, Math, Process,
-  ftpas, ftpas.types, ftpas.creative, ftpas.canvas, ftpas.font, ftpas.widget,
+  ftpas, ftpas.types, ftpas.app, ftpas.creative, ftpas.canvas, ftpas.font, ftpas.widget,
   ConsoleSama.Pty, ConsoleSama.Vt, ConsoleSama.Keys;
 
 const
@@ -53,6 +53,9 @@ type
     FBlinkOn: Boolean;
     FLastPumpTick: QWord;
     FLastTitle: string;
+    FDefaultFg: TTermColor;
+    FDefaultBg: TTermColor;
+    FIsDark: Boolean;
 
     procedure MeasureFont();
     procedure RecomputeGrid();
@@ -89,7 +92,11 @@ type
     procedure Zoom(ADelta: Integer);
     procedure ResetZoom();
     procedure ShowExited();
+    procedure RefreshThemeColors();
 
+    property IsDark: Boolean read FIsDark;
+    property DefaultForeground: TTermColor read FDefaultFg;
+    property DefaultBackground: TTermColor read FDefaultBg;
     property PTY: TTerminalPTY read FPTY;
     property Screen: TTerminalEmulator read FScreen;
     property FontRef: TFtFontRef read FFont;
@@ -112,15 +119,46 @@ type
 implementation
 
 var
-  DefaultForeground: TTermColor;
-  DefaultBackground: TTermColor;
+  GDefaultForeground: TTermColor;
+  GDefaultBackground: TTermColor;
 
 const
-  BasePalette: array[0..15] of LongWord = (
-    $00171A21, $00CC6666, $00B5BD68, $00F0C674,
-    $0081A2BE, $00B294BB, $008ABEB4, $00C5C8C6,
-    $004B4B4B, $00D54E53, $00B9CA4A, $00E7C547,
-    $007AA6DA, $00C397D8, $0070C0B0, $00EAEAEA
+  BasePaletteLight: array[0..15] of LongWord = (
+    $001E293B, // 0: Black (Deep Slate)
+    $00DC2626, // 1: Red
+    $0016A34A, // 2: Green
+    $00D97706, // 3: Yellow (Amber)
+    $002563EB, // 4: Blue
+    $009333EA, // 5: Magenta
+    $000891B2, // 6: Cyan
+    $0064748B, // 7: White / Gray (readable on white)
+    $0094A3B8, // 8: Bright Black (Muted Slate)
+    $00EF4444, // 9: Bright Red
+    $0022C55E, // 10: Bright Green
+    $00F59E0B, // 11: Bright Yellow (Amber 500)
+    $003B82F6, // 12: Bright Blue
+    $00A855F7, // 13: Bright Magenta
+    $0006B6D4, // 14: Bright Cyan
+    $000F172A  // 15: Bright White / Deep Slate
+  );
+
+  BasePaletteDark: array[0..15] of LongWord = (
+    $00171A21, // 0: Black
+    $00CC6666, // 1: Red
+    $00B5BD68, // 2: Green
+    $00F0C674, // 3: Yellow
+    $0081A2BE, // 4: Blue
+    $00B294BB, // 5: Magenta
+    $008ABEB4, // 6: Cyan
+    $00C5C8C6, // 7: White
+    $004B4B4B, // 8: Bright Black
+    $00D54E53, // 9: Bright Red
+    $00B9CA4A, // 10: Bright Green
+    $00E7C547, // 11: Bright Yellow
+    $007AA6DA, // 12: Bright Blue
+    $00C397D8, // 13: Bright Magenta
+    $0070C0B0, // 14: Bright Cyan
+    $00EAEAEA  // 15: Bright White
   );
 
 function MakeRGB(AValue: LongWord): TTermColor;
@@ -216,6 +254,8 @@ begin
   FLastPumpTick := 0;
   FLastTitle := '';
 
+  RefreshThemeColors();
+
   Focusable := True;
   AcceptsTab := True;
   Cursor := ftcIBeam;
@@ -282,6 +322,24 @@ begin
   Result.Height := Round(FCellH) + 1;
 end;
 
+procedure TConsoleTerminalView.RefreshThemeColors();
+begin
+  FIsDark := FtApp().DarkMode;
+  if FIsDark then
+  begin
+    FDefaultFg := MakeRGB($00D8DEE9);
+    FDefaultBg := MakeRGB($00171A21);
+  end
+  else
+  begin
+    FDefaultFg := MakeRGB($001E293B);
+    FDefaultBg := MakeRGB($00FFFFFF);
+  end;
+  GDefaultForeground := FDefaultFg;
+  GDefaultBackground := FDefaultBg;
+  Invalidate();
+end;
+
 function TConsoleTerminalView.PaletteColor(const AColor: TTermColor;
   AIsBackground: Boolean): TFtColor;
 var
@@ -291,9 +349,9 @@ begin
   if AColor.Kind = tckDefault then
   begin
     if AIsBackground then
-      v := DefaultBackground.Value
+      v := FDefaultBg.Value
     else
-      v := DefaultForeground.Value;
+      v := FDefaultFg.Value;
   end
   else if AColor.Kind = tckRGB then
     v := AColor.Value
@@ -301,7 +359,12 @@ begin
   begin
     idx := AColor.Value and $FF;
     if idx < 16 then
-      v := BasePalette[idx]
+    begin
+      if FIsDark then
+        v := BasePaletteDark[idx]
+      else
+        v := BasePaletteLight[idx];
+    end
     else if idx < 232 then
     begin
       Dec(idx, 16);
@@ -340,12 +403,6 @@ begin
   begin
     fg := PaletteColor(attr.BG, False);
     bg := PaletteColor(attr.FG, True);
-    if attr.BG.Kind = tckDefault then
-    begin
-      bg.R := 0.85;
-      bg.G := 0.87;
-      bg.B := 0.91;
-    end;
   end;
   if attr.Bold then
   begin
@@ -387,12 +444,22 @@ begin
   cell := FScreen.ViewCell(cy, cx);
   r := CellRect(cx, cy);
 
-  ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, 0.55, 0.75, 0.95);
+  if FIsDark then
+    ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, 0.55, 0.75, 0.95)
+  else
+    ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, 0.15, 0.39, 0.92);
 
   if cell.Code <> 0 then
   begin
     txt := FScreen.CellText(cell);
-    fg := PaletteColor(DefaultBackground, True);
+    if FIsDark then
+      fg := PaletteColor(FDefaultBg, True)
+    else
+    begin
+      fg.R := 1.0;
+      fg.G := 1.0;
+      fg.B := 1.0;
+    end;
     ACanvas.DrawText(r.Left, r.Top + FAscent, txt, fg.R, fg.G, fg.B, FFont.Handle);
   end;
 end;
@@ -414,8 +481,10 @@ end;
 
 procedure TConsoleTerminalView.DrawSelection(ACanvas: TFtCanvas);
 var
-  l1, c1, l2, c2, row, x1, x2: Integer;
+  l1, c1, l2, c2, row, x1, x2, col: Integer;
   r: TFtRect;
+  cell: TTermCell;
+  txt: string;
 begin
   if not FSelActive then Exit;
   SelectionNormalized(l1, c1, l2, c2);
@@ -425,7 +494,27 @@ begin
     if row = l1 then x1 := c1 else x1 := 0;
     if row = l2 then x2 := c2 else x2 := FCols - 1;
     r := CellRect(x1, row);
-    ACanvas.DrawRect(r.Left, r.Top, Round((x2 - x1 + 1) * FCellW), Round(FCellH), 0.30, 0.42, 0.60);
+    if FIsDark then
+      ACanvas.DrawRect(r.Left, r.Top, Round((x2 - x1 + 1) * FCellW), Round(FCellH), 0.20, 0.31, 0.48)
+    else
+      ACanvas.DrawRect(r.Left, r.Top, Round((x2 - x1 + 1) * FCellW), Round(FCellH), 0.70, 0.83, 0.99);
+
+    for col := x1 to x2 do
+    begin
+      cell := FScreen.ViewCell(row, col);
+      if cell.Code <> 0 then
+      begin
+        txt := FScreen.CellText(cell);
+        if txt <> '' then
+        begin
+          r := CellRect(col, row);
+          if FIsDark then
+            ACanvas.DrawText(r.Left, r.Top + FAscent, txt, 0.95, 0.95, 0.95, FFont.Handle)
+          else
+            ACanvas.DrawText(r.Left, r.Top + FAscent, txt, 0.05, 0.10, 0.20, FFont.Handle);
+        end;
+      end;
+    end;
   end;
 end;
 
@@ -716,7 +805,7 @@ begin
 end;
 
 initialization
-  DefaultForeground := MakeRGB($00D8DEE9);
-  DefaultBackground := MakeRGB($00171A21);
+  GDefaultForeground := MakeRGB($001E293B);
+  GDefaultBackground := MakeRGB($00FFFFFF);
 
 end.

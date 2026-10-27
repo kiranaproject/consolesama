@@ -5,11 +5,10 @@
 // the application and attached to the notebook pages; everything visible here
 // (menu bar, tab strip, status bar, colours) is declarative markup.
 //
-Rectangle {
+Container {
   id: root;
   width: 980;
   height: 660;
-  color: "#171a21";
 
   MenuBar {
     id: menuBar;
@@ -40,6 +39,8 @@ Rectangle {
       MenuItem { id: zoomOutItem;   text: "Zoom Out";       shortcut: "Ctrl+Minus"; }
       MenuItem { id: zoomResetItem; text: "Normal Size";    shortcut: "Ctrl+0"; }
       Separator { }
+      MenuItem { id: darkModeItem;  text: "Toggle Dark Mode"; shortcut: "Ctrl+Shift+D"; }
+      Separator { }
       MenuItem { id: scrollUpItem;   text: "Scroll Up";    shortcut: "Shift+PageUp"; }
       MenuItem { id: scrollDownItem; text: "Scroll Down";  shortcut: "Shift+PageDown"; }
       MenuItem { id: scrollEndItem;  text: "Scroll to End"; }
@@ -59,13 +60,13 @@ Rectangle {
     anchors.bottom: statusBar.top;
   }
 
-  Rectangle {
+  Panel {
     id: statusBar;
     anchors.left: parent.left;
     anchors.right: parent.right;
     anchors.bottom: parent.bottom;
     height: 24;
-    color: "#11141a";
+    padding: 0;
 
     Text {
       id: statusText;
@@ -76,7 +77,6 @@ Rectangle {
       anchors.rightMargin: 8;
       height: 20;
       text: "consolesama — ready";
-      color: "#7f8c98";
       font: "Sans 9";
     }
 
@@ -88,7 +88,6 @@ Rectangle {
       width: 260;
       height: 20;
       text: "";
-      color: "#5c6773";
       font: "Sans 9";
     }
   }

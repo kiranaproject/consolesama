@@ -9,7 +9,7 @@ interface
 
 uses
   Classes, SysUtils, BaseUnix,
-  ftpas, ftpas.types, ftpas.api, ftpas.widget, ftpas.layouts, ftpas.menus,
+  ftpas, ftpas.types, ftpas.api, ftpas.app, ftpas.widget, ftpas.layouts, ftpas.menus,
   ftpas.ftml, ftpas.font,
   ConsoleSama.Terminal, ConsoleSama.Vt, ConsoleSama.Pty, ConsoleSama.Keys;
 
@@ -60,6 +60,7 @@ type
     procedure MenuZoomIn(Sender: TObject);
     procedure MenuZoomOut(Sender: TObject);
     procedure MenuZoomReset(Sender: TObject);
+    procedure MenuToggleDarkMode(Sender: TObject);
     procedure MenuScrollUp(Sender: TObject);
     procedure MenuScrollDown(Sender: TObject);
     procedure MenuScrollEnd(Sender: TObject);
@@ -185,6 +186,7 @@ begin
   HookMenu('zoomInItem', @MenuZoomIn);
   HookMenu('zoomOutItem', @MenuZoomOut);
   HookMenu('zoomResetItem', @MenuZoomReset);
+  HookMenu('darkModeItem', @MenuToggleDarkMode);
   HookMenu('scrollUpItem', @MenuScrollUp);
   HookMenu('scrollDownItem', @MenuScrollDown);
   HookMenu('scrollEndItem', @MenuScrollEnd);
@@ -543,6 +545,11 @@ begin
           if tab <> nil then tab.View.SelectAll();
           Result := True;
         end;
+      'D':
+        begin
+          MenuToggleDarkMode(Self);
+          Result := True;
+        end;
     end;
     Exit;
   end;
@@ -640,6 +647,20 @@ var
 begin
   tab := ActiveTab();
   if tab <> nil then tab.View.ResetZoom();
+end;
+
+procedure TConsoleSamaWindow.MenuToggleDarkMode(Sender: TObject);
+var
+  i: Integer;
+begin
+  FtApp().DarkMode := not FtApp().DarkMode;
+  if FTabs <> nil then
+  begin
+    for i := 0 to FTabs.Count - 1 do
+      if TConsoleTab(FTabs[i]).View <> nil then
+        TConsoleTab(FTabs[i]).View.RefreshThemeColors();
+  end;
+  Invalidate();
 end;
 
 procedure TConsoleSamaWindow.MenuScrollUp(Sender: TObject);
