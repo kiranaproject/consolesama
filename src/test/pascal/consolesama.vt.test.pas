@@ -32,6 +32,8 @@ type
     procedure TestResizeWidthReflow();
     procedure TestResizeHeightShrinkAndExpandPreservation();
     procedure TestPromptResizeNoDuplicateOrJumpingCursor();
+    procedure TestLiveShellResizeKeepsActiveLineStable();
+    procedure TestLiveShellResizeRestoresRowsAbovePrompt();
   end;
 
 implementation
@@ -335,6 +337,57 @@ begin
   FScreen.Resize(75, 24);
   AssertEquals('Row 0 restored on 75 cols', 0, FScreen.CursorY);
   AssertEquals('Col 74 restored on 75 cols', 74, FScreen.CursorX);
+end;
+
+procedure TVtEmulatorTest.TestLiveShellResizeKeepsActiveLineStable();
+var
+  text: string;
+begin
+  // A live shell repaints its own input line on SIGWINCH. Reflowing the
+  // visible rows underneath it desyncs readline's cursor-up bookkeeping, so
+  // shell-mode resize must keep the physical row layout intact.
+  text := StringOfChar('x', 160);
+  FScreen.Feed(text);
+  AssertEquals('Row 0 holds 80 chars', Copy(text, 1, 80), FScreen.ViewLineText(0));
+  AssertEquals('Row 1 holds remaining 80 chars', Copy(text, 81, 80), FScreen.ViewLineText(1));
+  AssertEquals('Cursor on row 1', 1, FScreen.CursorY);
+  AssertEquals('Cursor at col 79', 79, FScreen.CursorX);
+
+  // Narrow with the shell policy: rows keep their positions and are only
+  // clamped; no extra rows are created for the wrapped line.
+  FScreen.Resize(30, 24, False);
+  AssertEquals('Row 0 clamped to new width', Copy(text, 1, 30), FScreen.ViewLineText(0));
+  AssertEquals('Row 1 keeps its own content', Copy(text, 81, 30), FScreen.ViewLineText(1));
+  AssertEquals('Cursor stays on row 1', 1, FScreen.CursorY);
+  AssertEquals('Cursor col clamped to 29', 29, FScreen.CursorX);
+  AssertEquals('No reflowed third row', '', FScreen.ViewLineText(2));
+end;
+
+procedure TVtEmulatorTest.TestLiveShellResizeRestoresRowsAbovePrompt();
+var
+  text: string;
+begin
+  // Rows that have scrolled above the prompt are not owned by readline, so
+  // their full content is kept and restored when the grid widens again.
+  text := StringOfChar('x', 160);
+  FScreen.Feed(text + #13#10 + 'prompt> ');
+  AssertEquals('Cursor on prompt row', 2, FScreen.CursorY);
+  AssertEquals('Cursor after prompt', 8, FScreen.CursorX);
+
+  FScreen.Resize(30, 24, False);
+  AssertEquals('Previous row 0 clamped', Copy(text, 1, 30), FScreen.ViewLineText(0));
+  AssertEquals('Previous row 1 clamped', Copy(text, 81, 30), FScreen.ViewLineText(1));
+  AssertEquals('Prompt row preserved', 'prompt>', FScreen.ViewLineText(2));
+  AssertEquals('Cursor row preserved', 2, FScreen.CursorY);
+  AssertEquals('Cursor col preserved', 8, FScreen.CursorX);
+  AssertEquals('No extra row', '', FScreen.ViewLineText(3));
+
+  FScreen.Resize(80, 24, False);
+  AssertEquals('Previous row 0 restored', Copy(text, 1, 80), FScreen.ViewLineText(0));
+  AssertEquals('Previous row 1 restored', Copy(text, 81, 80), FScreen.ViewLineText(1));
+  AssertEquals('Prompt row still intact', 'prompt>', FScreen.ViewLineText(2));
+  AssertEquals('Cursor still on prompt row', 2, FScreen.CursorY);
+  AssertEquals('Cursor still after prompt', 8, FScreen.CursorX);
 end;
 
 initialization

@@ -101,6 +101,7 @@ type
     function  NewLine(): TTermLine;
     function  VisibleTop(): Integer;
     procedure ClearLine(ALine: TTermLine; AX1, AX2: Integer);
+    procedure ClearRow(AY, AX1, AX2: Integer);
     procedure ClearScreenLines(AX1, AX2: Integer);
     procedure ResetPen();
     procedure ResetTabStops();
@@ -140,7 +141,7 @@ type
 
     procedure Feed(ABuffer: PByte; ACount: Integer);
     procedure Feed(const AData: RawByteString);
-    procedure Resize(ACols, ARows: Integer; AReflowCursorLine: Boolean = True);
+    procedure Resize(ACols, ARows: Integer; AReflowScreen: Boolean = True);
     procedure Clear();
 
     // View access (0-based; row 0 is the top visible row after scrolling).
@@ -354,7 +355,21 @@ var
 begin
   top := GetScreenRow(0);
   for y := 0 to FRows - 1 do
-    ClearLine(FLines[top + y], AX1, AX2);
+    ClearRow(y, AX1, AX2);
+end;
+
+// Clear cells of a viewport row. Erasing a whole row also drops its "continues
+// on the next row" marker; otherwise a previously wrapped row that has been
+// rewritten keeps claiming the row below it as part of the same logical line.
+procedure TTerminalEmulator.ClearRow(AY, AX1, AX2: Integer);
+var
+  idx: Integer;
+begin
+  idx := GetScreenRow(AY);
+  if (idx < 0) or (idx >= Length(FLines)) then Exit;
+  ClearLine(FLines[idx], AX1, AX2);
+  if (AX1 <= 0) and (AX2 >= FCols - 1) and (idx < Length(FLinesWrapped)) then
+    FLinesWrapped[idx] := False;
 end;
 
 procedure TTerminalEmulator.EnsureScrollable();
@@ -509,7 +524,7 @@ end;
 procedure TTerminalEmulator.PutChar(AChar: LongWord);
 var
   line: TTermLine;
-  w, x, y: Integer;
+  w, x, y, row: Integer;
 begin
   if not FAutoWrap then
     FWrapPending := False;
@@ -554,6 +569,15 @@ begin
     end
     else
       x := FCols - w;
+  end;
+
+  // Writing from column 0 starts a new logical line in this row; drop any
+  // stale wrap marker left over from a longer previous layout.
+  if x = 0 then
+  begin
+    row := VisibleTop() + y;
+    if (row >= 0) and (row < Length(FLinesWrapped)) then
+      FLinesWrapped[row] := False;
   end;
 
   line[x].Code := AChar;
@@ -777,10 +801,10 @@ begin
         if FCursorX + n < FCols then
         begin
           Move(line[FCursorX], line[FCursorX + n], (FCols - FCursorX - n) * SizeOf(TTermCell));
-          ClearLine(line, FCursorX, FCursorX + n - 1);
+          ClearRow(FCursorY, FCursorX, FCursorX + n - 1);
         end
         else
-          ClearLine(line, FCursorX, FCols - 1);
+          ClearRow(FCursorY, FCursorX, FCols - 1);
       end;
     'A': // CUU — Cursor up
       SetCursor(FCursorX, FCursorY - Param(0, 1));
@@ -813,17 +837,17 @@ begin
         case n of
           0: // from cursor to end of screen
             begin
-              ClearLine(CursorLine(), FCursorX, FCols - 1);
+              ClearRow(FCursorY, FCursorX, FCols - 1);
               top := GetScreenRow(0);
               for y := FCursorY + 1 to FRows - 1 do
-                ClearLine(FLines[top + y], 0, FCols - 1);
+                ClearRow(y, 0, FCols - 1);
             end;
           1: // from beginning to cursor
             begin
               top := GetScreenRow(0);
               for y := 0 to FCursorY - 1 do
-                ClearLine(FLines[top + y], 0, FCols - 1);
-              ClearLine(CursorLine(), 0, FCursorX);
+                ClearRow(y, 0, FCols - 1);
+              ClearRow(FCursorY, 0, FCursorX);
             end;
           2, 3: // clear entire display
             ClearScreenLines(0, FCols - 1);
@@ -834,9 +858,9 @@ begin
       begin
         n := Param(0, 0);
         case n of
-          0: ClearLine(CursorLine(), FCursorX, FCols - 1);
-          1: ClearLine(CursorLine(), 0, FCursorX);
-          2: ClearLine(CursorLine(), 0, FCols - 1);
+          0: ClearRow(FCursorY, FCursorX, FCols - 1);
+          1: ClearRow(FCursorY, 0, FCursorX);
+          2: ClearRow(FCursorY, 0, FCols - 1);
         end;
         FChanged := True;
       end;
@@ -869,10 +893,10 @@ begin
         if FCursorX + n < FCols then
         begin
           Move(line[FCursorX + n], line[FCursorX], (FCols - FCursorX - n) * SizeOf(TTermCell));
-          ClearLine(line, FCols - n, FCols - 1);
+          ClearRow(FCursorY, FCols - n, FCols - 1);
         end
         else
-          ClearLine(line, FCursorX, FCols - 1);
+          ClearRow(FCursorY, FCursorX, FCols - 1);
         FChanged := True;
       end;
     'S': // SU — Scroll up
@@ -882,7 +906,7 @@ begin
     'X': // ECH — Erase character
       begin
         n := Param(0, 1);
-        ClearLine(CursorLine(), FCursorX, FCursorX + n - 1);
+        ClearRow(FCursorY, FCursorX, FCursorX + n - 1);
       end;
     'Z': // CBT — Cursor back tab
       begin
@@ -1268,10 +1292,12 @@ begin
   FChanged := True;
 end;
 
-procedure TTerminalEmulator.Resize(ACols, ARows: Integer; AReflowCursorLine: Boolean = True);
+procedure TTerminalEmulator.Resize(ACols, ARows: Integer; AReflowScreen: Boolean = True);
 var
   i, idx, k, paraStart, paraEnd: Integer;
   absCursorX, absCursorY: Integer;
+  cursorParaStart: Integer;
+  cellWidth: Integer;
   newCursorLine, newCursorCol: Integer;
   logicalCells: array of TTermCell;
   cellCount, chunkStart, chunkLen: Integer;
@@ -1345,6 +1371,21 @@ begin
   while (paraEnd < Length(FLines) - 1) and (paraEnd < Length(FLinesWrapped)) and FLinesWrapped[paraEnd] do
     Inc(paraEnd);
 
+  cursorParaStart := paraStart;
+
+  // With a live shell the whole visible screen is left untouched (only cell
+  // widths are clamped). GNU Readline redraws its own line on SIGWINCH using
+  // cursor-up movements based on the row count it last printed; reflowing any
+  // row on screen would change that row count underneath it and desync the
+  // cursor. Only scrollback above the viewport is reflowed.
+  if not AReflowScreen then
+  begin
+    // If the active line starts above the viewport (very narrow/short grid),
+    // preserve from its start as well so its row count stays stable.
+    paraStart := Min(VisibleTop(), cursorParaStart);
+    paraEnd := Length(FLines) - 1;
+  end;
+
   newCursorLine := -1;
   newCursorCol := -1;
 
@@ -1356,17 +1397,26 @@ begin
     idx := 0;
     while idx < Length(FLines) do
     begin
-      // When a shell is running, preserve the active cursor paragraph without reflow
-      // so GNU Readline's SIGWINCH cursor-up escape sequences match exact row offsets.
-      if (not AReflowCursorLine) and (idx = paraStart) then
+      // With a live shell the whole visible screen is preserved without
+      // reflow so GNU Readline's SIGWINCH cursor-up escape sequences match the
+      // row offsets it last printed.
+      if (not AReflowScreen) and (idx = paraStart) then
       begin
         for k := paraStart to paraEnd do
         begin
           totalNew := Length(newLines);
           SetLength(newLines, totalNew + 1);
           SetLength(newWrapped, totalNew + 1);
-          SetLength(newLines[totalNew], ACols);
-          chunkLen := Min(ACols, Length(FLines[k]));
+
+          // Rows above the prompt keep their full cell content when the grid
+          // narrows. They are off the shell's radar, so when they later scroll
+          // into history they can be reflowed without losing their tail.
+          cellWidth := ACols;
+          if (not AReflowScreen) and (k < cursorParaStart) then
+            cellWidth := Max(ACols, Length(FLines[k]));
+
+          SetLength(newLines[totalNew], cellWidth);
+          chunkLen := Min(cellWidth, Length(FLines[k]));
           if chunkLen > 0 then
             Move(FLines[k][0], newLines[totalNew][0], chunkLen * SizeOf(TTermCell));
 
@@ -1389,6 +1439,8 @@ begin
 
       while idx < Length(FLines) do
       begin
+        if (not AReflowScreen) and (idx >= paraStart) then
+          Break;
         Inc(logicalPhysicalLines);
         if idx = absCursorY then
         begin

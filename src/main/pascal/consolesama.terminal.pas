@@ -321,6 +321,8 @@ begin
   end;
   FCols := cols;
   FRows := rows;
+  // A live shell repaints its own line on SIGWINCH, so leave the visible
+  // screen's row layout alone; scrollback above it is still reflowed.
   FScreen.Resize(FCols, FRows, FPTY = nil);
   if FPTY <> nil then
     FPTY.Resize(FCols, FRows);
@@ -732,6 +734,7 @@ var
   buf: array[0..65535] of Byte;
   n: Integer;
   beforeOffset: Integer;
+
 begin
   if FPTY = nil then Exit;
   beforeOffset := FScreen.ScrollOffset();

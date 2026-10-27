@@ -181,6 +181,18 @@ begin
     promptCount := CountPromptInScreen();
     AssertEquals('Prompt count with typed command at 25 cols', 1, promptCount);
 
+    // Height changes while the input line is wrapped must not leave stale
+    // copies of the prompt behind either.
+    screen.Resize(25, 12, False);
+    FPTY.Resize(25, 12);
+    PumpPty(200);
+    AssertEquals('Prompt count after height shrink', 1, CountPromptInScreen());
+
+    screen.Resize(25, 30, False);
+    FPTY.Resize(25, 30);
+    PumpPty(200);
+    AssertEquals('Prompt count after height grow', 1, CountPromptInScreen());
+
     screen.Resize(80, 24, False);
     FPTY.Resize(80, 24);
     PumpPty(200);
