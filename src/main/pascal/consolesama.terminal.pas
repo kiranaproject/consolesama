@@ -47,6 +47,7 @@ type
     FCellW: Double;
     FCellH: Double;
     FAscent: Double;
+    FDescent: Double;
     FSelActive: Boolean;
     FSelecting: Boolean;
     FSelStartX, FSelStartY: Integer;
@@ -66,6 +67,8 @@ type
     procedure RecomputeGrid();
     function  CellRect(ACol, ARow: Integer): TFtRect;
     function  CellSpan(const ACell: TTermCell): Integer;
+    // Baseline that centres the painted glyphs inside a cell.
+    function  TextBaseline(const ARect: TFtRect): Double;
     procedure DrawCellBackground(ACanvas: TFtCanvas; ACol, ARow: Integer;
       const ACell: TTermCell);
     procedure DrawCellGlyph(ACanvas: TFtCanvas; ACol, ARow: Integer;
@@ -317,6 +320,7 @@ begin
     desc := 4.0;
   end;
   FAscent := asc;
+  FDescent := desc;
   FCellW := Ceil(adv);
   // Leave room under the baseline for fallback-font descenders.
   FCellH := Ceil(h) + CellBottomPadding;
@@ -410,6 +414,25 @@ begin
     Result := 2
   else
     Result := 1;
+end;
+
+// Baseline that centres the glyphs inside a cell.
+//
+// The font reports an ascent that includes internal leading, so centring the
+// reported ascent/descent box leaves the visible ink about 20% too low. The
+// constants below shrink the box to the part the glyphs actually paint, which
+// keeps capital letters and descenders optically centred.
+function TConsoleTerminalView.TextBaseline(const ARect: TFtRect): Double;
+const
+  InkAscentScale  = 0.78;  // measured cap height / reported ascent
+  InkDescentScale = 0.95;  // measured descender depth / reported descent
+var
+  inkAscent, inkDescent, inkHeight: Double;
+begin
+  inkAscent := FAscent * InkAscentScale;
+  inkDescent := FDescent * InkDescentScale;
+  inkHeight := inkAscent + inkDescent;
+  Result := ARect.Top + (ARect.Height - inkHeight) / 2.0 + inkAscent;
 end;
 
 procedure TConsoleTerminalView.RefreshThemeColors();
@@ -519,7 +542,7 @@ begin
   if span > 1 then
     r.Width := Round(span * FCellW) + 1;
 
-  ACanvas.DrawText(r.Left, r.Top + FAscent, txt, fg.R, fg.G, fg.B, FFont.Handle);
+  ACanvas.DrawText(r.Left, TextBaseline(r), txt, fg.R, fg.G, fg.B, FFont.Handle);
 
   if attr.Underline then
     ACanvas.DrawRect(r.Left, r.Top + Round(FCellH) - 2, r.Width, 1, fg.R, fg.G, fg.B);
@@ -617,7 +640,7 @@ begin
     try
       // Proportional fallback glyphs are narrower than the cell box; start at
       // the run's first cell so the text lines up with its neighbours.
-      ACanvas.DrawText(r.Left, r.Top + FAscent,
+      ACanvas.DrawText(r.Left, TextBaseline(r),
         runs[k].Text, fg.R, fg.G, fg.B, FFont.Handle);
     finally
       ACanvas.PopClipRect();
@@ -758,7 +781,7 @@ begin
       fg.G := 1.0;
       fg.B := 1.0;
     end;
-    ACanvas.DrawText(r.Left, r.Top + FAscent, txt, fg.R, fg.G, fg.B, FFont.Handle);
+    ACanvas.DrawText(r.Left, TextBaseline(r), txt, fg.R, fg.G, fg.B, FFont.Handle);
   end;
 end;
 
@@ -807,9 +830,9 @@ begin
         begin
           r := CellRect(col, row);
           if FIsDark then
-            ACanvas.DrawText(r.Left, r.Top + FAscent, txt, 0.95, 0.95, 0.95, FFont.Handle)
+            ACanvas.DrawText(r.Left, TextBaseline(r), txt, 0.95, 0.95, 0.95, FFont.Handle)
           else
-            ACanvas.DrawText(r.Left, r.Top + FAscent, txt, 0.05, 0.10, 0.20, FFont.Handle);
+            ACanvas.DrawText(r.Left, TextBaseline(r), txt, 0.05, 0.10, 0.20, FFont.Handle);
         end;
       end;
     end;
