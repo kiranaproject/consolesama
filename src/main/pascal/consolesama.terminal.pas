@@ -611,19 +611,33 @@ function TConsoleTerminalView.DrawBoxDrawing(ACanvas: TFtCanvas;
 const
   // Line thickness in pixels. Kept at 1 so adjacent cells join exactly.
   T = 1;
+  // Half-distance between the two strokes of a double line.
+  DOff = 2;
+  // Double strokes are drawn one pixel thicker so they read as solid rules.
+  DT = 2;
 var
   x0, y0, x1, y1, cx, cy, w, h: Integer;
 
-  procedure HLine(AFromX, AToX, AY: Integer);
+  procedure HLineT(AFromX, AToX, AY, AThick: Integer);
   begin
     if AToX > AFromX then
-      ACanvas.DrawRect(AFromX, AY, AToX - AFromX, T, AFg.R, AFg.G, AFg.B);
+      ACanvas.DrawRect(AFromX, AY, AToX - AFromX, AThick, AFg.R, AFg.G, AFg.B);
+  end;
+
+  procedure VLineT(AX, AFromY, AToY, AThick: Integer);
+  begin
+    if AToY > AFromY then
+      ACanvas.DrawRect(AX, AFromY, AThick, AToY - AFromY, AFg.R, AFg.G, AFg.B);
+  end;
+
+  procedure HLine(AFromX, AToX, AY: Integer);
+  begin
+    HLineT(AFromX, AToX, AY, T);
   end;
 
   procedure VLine(AX, AFromY, AToY: Integer);
   begin
-    if AToY > AFromY then
-      ACanvas.DrawRect(AX, AFromY, T, AToY - AFromY, AFg.R, AFg.G, AFg.B);
+    VLineT(AX, AFromY, AToY, T);
   end;
 
   // Arms reach *through* the centre so corners and tees meet without a notch.
@@ -655,33 +669,72 @@ begin
     $252C: begin Left(cy); Right(cy); Down(cx); end;// ┬
     $2534: begin Left(cy); Right(cy); Up(cx); end;  // ┴
     $253C: begin Up(cx); Down(cx); Left(cy); Right(cy); end;  // ┼
+    // Double lines. The pair sits at +-DOff so the two strokes are clearly
+    // separated, and each stroke is DT thick so it reads as a solid rule.
+    // Corners keep the outer stroke outermost and the inner stroke inside it,
+    // running in the direction the corner implies: ╔/╗ go down, ╚/╝ go up,
+    // ╔/╚ go right, ╗/╝ go left.
     $2550: begin                                    // ═
-        HLine(x0, x1, cy - 1);
-        HLine(x0, x1, cy + 1);
+        HLineT(x0, x1, cy - DOff, DT);
+        HLineT(x0, x1, cy + DOff, DT);
       end;
     $2551: begin                                    // ║
-        VLine(cx - 1, y0, y1);
-        VLine(cx + 1, y0, y1);
+        VLineT(cx - DOff, y0, y1, DT);
+        VLineT(cx + DOff, y0, y1, DT);
       end;
-    $2554: begin                                    // ╔
-        VLine(cx - 1, y0, cy + 1);
-        HLine(cx - 1, x1, cy - 1);
-        HLine(cx + 1, x1, cy + 1);
+    $2554: begin                                    // ╔ down + right
+        HLineT(cx - DOff, x1, cy - DOff, DT);
+        HLineT(cx + DOff, x1, cy + DOff, DT);
+        VLineT(cx - DOff, cy - DOff, y1, DT);
+        VLineT(cx + DOff, cy + DOff, y1, DT);
       end;
-    $2557: begin                                    // ╗
-        VLine(cx - 1, y0, cy + 1);
-        HLine(x0, cx + 1, cy - 1);
-        HLine(x0, cx - 1, cy + 1);
+    $2557: begin                                    // ╗ down + left
+        HLineT(x0, cx + DOff + DT, cy - DOff, DT);
+        HLineT(x0, cx - DOff + DT, cy + DOff, DT);
+        VLineT(cx + DOff, cy - DOff, y1, DT);
+        VLineT(cx - DOff, cy + DOff, y1, DT);
       end;
-    $255A: begin                                    // ╚
-        VLine(cx - 1, cy - 1, y1);
-        HLine(cx - 1, x1, cy + 1);
-        HLine(cx + 1, x1, cy - 1);
+    $255A: begin                                    // ╚ up + right
+        HLineT(cx - DOff, x1, cy + DOff, DT);
+        HLineT(cx + DOff, x1, cy - DOff, DT);
+        VLineT(cx - DOff, y0, cy + DOff + DT, DT);
+        VLineT(cx + DOff, y0, cy - DOff + DT, DT);
       end;
-    $255D: begin                                    // ╝
-        VLine(cx - 1, cy - 1, y1);
-        HLine(x0, cx + 1, cy + 1);
-        HLine(x0, cx - 1, cy - 1);
+    $255D: begin                                    // ╝ up + left
+        HLineT(x0, cx + DOff + DT, cy + DOff, DT);
+        HLineT(x0, cx - DOff + DT, cy - DOff, DT);
+        VLineT(cx + DOff, y0, cy + DOff + DT, DT);
+        VLineT(cx - DOff, y0, cy - DOff + DT, DT);
+      end;
+    $2560: begin                                    // ╠ vertical + right
+        VLineT(cx - DOff, y0, y1, DT);
+        VLineT(cx + DOff, y0, y1, DT);
+        HLineT(cx - DOff, x1, cy - DOff, DT);
+        HLineT(cx + DOff, x1, cy + DOff, DT);
+      end;
+    $2563: begin                                    // ╣ vertical + left
+        VLineT(cx - DOff, y0, y1, DT);
+        VLineT(cx + DOff, y0, y1, DT);
+        HLineT(x0, cx - DOff + DT, cy - DOff, DT);
+        HLineT(x0, cx + DOff + DT, cy + DOff, DT);
+      end;
+    $2566: begin                                    // ╦ down + horizontal
+        HLineT(x0, x1, cy - DOff, DT);
+        HLineT(x0, x1, cy + DOff, DT);
+        VLineT(cx - DOff, y0, cy - DOff + DT, DT);
+        VLineT(cx + DOff, y0, cy + DOff + DT, DT);
+      end;
+    $2569: begin                                    // ╩ up + horizontal
+        HLineT(x0, x1, cy - DOff, DT);
+        HLineT(x0, x1, cy + DOff, DT);
+        VLineT(cx - DOff, cy - DOff, y1, DT);
+        VLineT(cx + DOff, cy + DOff, y1, DT);
+      end;
+    $256C: begin                                    // ╬
+        HLineT(x0, x1, cy - DOff, DT);
+        HLineT(x0, x1, cy + DOff, DT);
+        VLineT(cx - DOff, y0, y1, DT);
+        VLineT(cx + DOff, y0, y1, DT);
       end;
     $2580, $2581, $2582, $2583, $2584, $2585, $2586, $2587,
     $2588, $2589, $258A, $258B, $258C, $258D, $258E, $258F,
