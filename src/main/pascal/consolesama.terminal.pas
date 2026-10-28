@@ -62,6 +62,10 @@ type
     FDefaultBg: TTermColor;
     FIsDark: Boolean;
     FScrollBar: TFtScrollBar;
+    // Last button seen down, so release and drag reports can name it.
+    FMouseButton: Integer;
+    FMouseButtonDown: Boolean;
+    FMouseLastX, FMouseLastY: Integer;
 
     procedure MeasureFont();
     procedure RecomputeGrid();
@@ -94,6 +98,11 @@ type
     procedure HandleScrollBarScroll(Sender: TFtWidget; Value: Double);
     procedure SetScrollBar(AValue: TFtScrollBar);
     procedure SendInput(const AData: string);
+    // Encode one mouse event for the application (xterm mouse protocol).
+    function  EncodeMouse(ACol, ARow, AButton: Integer; APressed, AMotion: Boolean): string;
+    // Forward a mouse event to the shell when it asked for reports. Returns
+    // False when the event should be handled locally (selection, paste).
+    function  ReportMouse(ACol, ARow, AButton: Integer; APressed, AMotion: Boolean): Boolean;
     procedure PumpOutput();
     function  CellAt(AX, AY: Integer; out ACol, ARow: Integer): Boolean;
     procedure SelectionNormalized(out ALine1, ACol1, ALine2, ACol2: Integer);
@@ -286,6 +295,10 @@ begin
   FSelActive := False;
   FSelecting := False;
   FBlinkOn := True;
+  FMouseButton := 0;
+  FMouseButtonDown := False;
+  FMouseLastX := -1;
+  FMouseLastY := -1;
   FLastPumpTick := 0;
   FLastTitle := '';
 
@@ -1240,6 +1253,94 @@ begin
   DrawCursor(ACanvas);
 end;
 
+
+// Build one mouse report for the application.
+//
+// The button code packs the event kind and modifiers:
+//   bits 0-1  button (0 left, 1 middle, 2 right)
+//   bit 2     shift, bit 3 meta, bit 4 ctrl
+//   bit 5     motion (drag)
+//   bit 6     wheel (64 + direction)
+//
+// SGR and urxvt use 1-based coordinates and report release explicitly; the
+// original X10 format packs everything into single bytes offset by 32, which
+// is why it cannot address columns past 223.
+function TConsoleTerminalView.EncodeMouse(ACol, ARow, AButton: Integer;
+  APressed, AMotion: Boolean): string;
+var
+  cb: Integer;
+  cx, cy: Integer;
+begin
+  Result := '';
+
+  // Wheel directions sit in the 64+ range; buttons 1..3 map to 0..2.
+  case AButton of
+    4: cb := 64;   // wheel up
+    5: cb := 65;   // wheel down
+    6: cb := 66;   // wheel left
+    7: cb := 67;   // wheel right
+    1: cb := 0;
+    2: cb := 1;
+    3: cb := 2;
+  else
+    cb := 3;
+  end;
+
+  if AMotion then
+    Inc(cb, 32);
+
+  cx := ACol + 1;
+  cy := ARow + 1;
+
+  case FScreen.MouseEncoding of
+    tmeSGR:
+      // '<' form: press ends with 'M', release with 'm'. The release keeps the
+      // button number so the application knows which one went up.
+      if APressed then
+        Result := Format(#27'[<%d;%d;%dM', [cb, cx, cy])
+      else
+        Result := Format(#27'[<%d;%d;%dm', [cb, cx, cy]);
+    tmeUrxvt:
+      begin
+        if not APressed then
+          cb := 3 + 32 * Ord(AMotion);
+        Result := Format(#27'[%d;%d;%dM', [cb, cx, cy]);
+      end;
+  else
+    begin
+      // Legacy X10 / UTF-8 forms encode a release as button 3.
+      if not APressed then
+        cb := 3 + 32 * Ord(AMotion);
+      if FScreen.MouseEncoding = tmeUtf8 then
+        Result := #27'[M' + CodePointToUtf8(cb + 32) +
+          CodePointToUtf8(cx + 32) + CodePointToUtf8(cy + 32)
+      else
+        Result := #27'[M' + Chr((cb + 32) and $FF) +
+          Chr((cx + 32) and $FF) + Chr((cy + 32) and $FF);
+    end;
+  end;
+end;
+
+// Forward a mouse event to the application when it has enabled reporting.
+// Returns False when the view should keep handling the event itself
+// (selection, middle-click paste, scrolling).
+function TConsoleTerminalView.ReportMouse(ACol, ARow, AButton: Integer;
+  APressed, AMotion: Boolean): Boolean;
+var
+  data: string;
+begin
+  Result := False;
+  if not FScreen.MouseTracking then Exit;
+
+  // Mode 9 (X10) only ever reports presses.
+  if (FScreen.MouseMode = tmmX10) and (not APressed) then Exit(True);
+
+  data := EncodeMouse(ACol, ARow, AButton, APressed, AMotion);
+  if data <> '' then
+    SendInput(data);
+  Result := True;
+end;
+
 procedure TConsoleTerminalView.SendInput(const AData: string);
 begin
   if (FPTY <> nil) and (AData <> '') then
@@ -1298,9 +1399,21 @@ procedure TConsoleTerminalView.HandleMouseDown(Sender: TFtDrawingArea;
 var
   c, r: Integer;
 begin
+  CellAt(AX, AY, c, r);
+  SetFocus();
+
+  // When the application asked for mouse reports, forward the press and leave
+  // selection alone; otherwise a TUI cannot react to clicks or hover.
+  FMouseButton := AButton;
+  FMouseButtonDown := True;
+  if ReportMouse(c, r, AButton, True, False) then
+  begin
+    Invalidate();
+    Exit;
+  end;
+
   if AButton = 1 then
   begin
-    CellAt(AX, AY, c, r);
     FSelStartX := c;
     FSelStartY := r;
     FSelEndX := c;
@@ -1311,7 +1424,6 @@ begin
       FSelActive := False;
       Invalidate();
     end;
-    SetFocus();
   end
   else if AButton = 3 then
   begin
@@ -1323,8 +1435,26 @@ procedure TConsoleTerminalView.HandleMouseMove(Sender: TFtDrawingArea; AX, AY: I
 var
   c, r: Integer;
 begin
-  if not FSelecting then Exit;
   CellAt(AX, AY, c, r);
+
+  // Motion reporting: mode 1002 only while a button is held, mode 1003 always.
+  // X10 and 1000 never report motion.
+  if FScreen.MouseTracking then
+  begin
+    if (FScreen.MouseMode = tmmAnyEvent) or
+       ((FScreen.MouseMode = tmmButtonEvent) and FMouseButtonDown) then
+    begin
+      if (c <> FMouseLastX) or (r <> FMouseLastY) then
+      begin
+        FMouseLastX := c;
+        FMouseLastY := r;
+        ReportMouse(c, r, FMouseButton, True, True);
+      end;
+      Exit;
+    end;
+  end;
+
+  if not FSelecting then Exit;
   if (c <> FSelEndX) or (r <> FSelEndY) then
   begin
     FSelEndX := c;
@@ -1336,22 +1466,56 @@ end;
 
 procedure TConsoleTerminalView.HandleMouseUp(Sender: TFtDrawingArea;
   AX, AY, AButton: Integer);
+var
+  c, r: Integer;
 begin
+  CellAt(AX, AY, c, r);
+  FMouseButtonDown := False;
+
+  if ReportMouse(c, r, AButton, False, False) then
+  begin
+    FMouseButton := 0;
+    Invalidate();
+    Exit;
+  end;
+
   if AButton = 1 then
   begin
     if FSelecting then
     begin
-      CellAt(AX, AY, FSelEndX, FSelEndY);
+      FSelEndX := c;
+      FSelEndY := r;
       FSelActive := (FSelStartX <> FSelEndX) or (FSelStartY <> FSelEndY);
       FSelecting := False;
       Invalidate();
     end;
   end;
+  FMouseButton := 0;
 end;
 
 procedure TConsoleTerminalView.HandleWheel(Sender: TFtDrawingArea;
   AX, AY, ADeltaX, ADeltaY: Integer);
+var
+  c, r, button, i, count: Integer;
 begin
+  CellAt(AX, AY, c, r);
+
+  if FScreen.MouseTracking then
+  begin
+    if ADeltaY > 0 then button := 4 else button := 5;
+    count := Abs(ADeltaY);
+    if count < 1 then count := 1;
+    for i := 1 to count do
+    begin
+      // SGR reports a wheel notch as a press only; the legacy formats expect
+      // a matching release, which xterm emits straight after the press.
+      ReportMouse(c, r, button, True, False);
+      if FScreen.MouseEncoding <> tmeSGR then
+        ReportMouse(c, r, button, False, False);
+    end;
+    Exit;
+  end;
+
   FScreen.ScrollView(ADeltaY * 3);
   UpdateScrollBar();
   Invalidate();

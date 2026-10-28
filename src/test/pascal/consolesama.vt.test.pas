@@ -29,6 +29,7 @@ type
     procedure TestBoxDrawingCodePoints();
     procedure TestPrivateCsiIsNotSgr();
     procedure TestFractionalBoxDrawingCodePoints();
+    procedure TestMouseModeNegotiation();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -304,6 +305,40 @@ begin
     AssertEquals(Format('U+%.4x stored', [cp]), cp, cell.Code);
     AssertEquals(Format('U+%.4x is one cell', [cp]), 1, FScreen.CursorX);
   end;
+end;
+
+procedure TVtEmulatorTest.TestMouseModeNegotiation();
+begin
+  AssertFalse('Mouse reporting off by default', FScreen.MouseTracking);
+
+  FScreen.Feed(#27'[?1000h');
+  AssertTrue('Mode 1000 enables reporting', FScreen.MouseTracking);
+  AssertEquals('Mode 1000 is normal tracking', Ord(tmmNormal), Ord(FScreen.MouseMode));
+
+  FScreen.Feed(#27'[?1002h');
+  AssertEquals('Mode 1002 is button-event', Ord(tmmButtonEvent), Ord(FScreen.MouseMode));
+
+  FScreen.Feed(#27'[?1003h');
+  AssertEquals('Mode 1003 is any-event', Ord(tmmAnyEvent), Ord(FScreen.MouseMode));
+
+  // Encoding selection
+  AssertEquals('Legacy encoding by default', Ord(tmeX10), Ord(FScreen.MouseEncoding));
+  FScreen.Feed(#27'[?1006h');
+  AssertEquals('Mode 1006 selects SGR', Ord(tmeSGR), Ord(FScreen.MouseEncoding));
+  FScreen.Feed(#27'[?1015h');
+  AssertEquals('Mode 1015 selects urxvt', Ord(tmeUrxvt), Ord(FScreen.MouseEncoding));
+  FScreen.Feed(#27'[?1005h');
+  AssertEquals('Mode 1005 selects UTF-8', Ord(tmeUtf8), Ord(FScreen.MouseEncoding));
+
+  // Turning the mode off stops reporting
+  FScreen.Feed(#27'[?1003l');
+  AssertFalse('Mode 1003 reset disables reporting', FScreen.MouseTracking);
+
+  // X10 press-only mode
+  FScreen.Feed(#27'[?9h');
+  AssertEquals('Mode 9 is X10', Ord(tmmX10), Ord(FScreen.MouseMode));
+  FScreen.Feed(#27'[?9l');
+  AssertFalse('Mode 9 reset disables reporting', FScreen.MouseTracking);
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();

@@ -28,6 +28,20 @@ type
     Bold, Dim, Italic, Underline, Blink, Reverse, Hidden, Strike: Boolean;
   end;
 
+  // Mouse reporting, as negotiated with the application via DECSET/DECRST.
+  //   tmmX10         press only (mode 9)
+  //   tmmNormal      press and release (mode 1000)
+  //   tmmButtonEvent press, release and drag while a button is held (1002)
+  //   tmmAnyEvent    every motion, button held or not (1003)
+  TMouseMode = (tmmNone, tmmX10, tmmNormal, tmmButtonEvent, tmmAnyEvent);
+
+  // Wire format for the reports.
+  //   tmeX10    ESC [ M Cb Cx Cy, single bytes offset by 32
+  //   tmeUtf8   same, but Cb/Cx/Cy encoded as UTF-8 (mode 1005)
+  //   tmeSGR    ESC [ < Cb ; Cx ; Cy M (press) / m (release) (mode 1006)
+  //   tmeUrxvt  ESC [ Cb ; Cx ; Cy M (mode 1015)
+  TMouseEncoding = (tmeX10, tmeUtf8, tmeSGR, tmeUrxvt);
+
   TCellFlag = (cfWideLead, cfWideTail);
 
   // Combining marks are stored on the cell they decorate so they keep the
@@ -77,6 +91,8 @@ type
     FAppCursorKeys: Boolean;
     FAppKeypad: Boolean;
     FBracketedPaste: Boolean;
+    FMouseMode: TMouseMode;
+    FMouseEncoding: TMouseEncoding;
     FNewLineMode: Boolean;
     FReverseVideo: Boolean;
     FTabStops: array of Boolean;
@@ -163,6 +179,7 @@ type
     function  ViewCell(AViewRow, ACol: Integer): TTermCell;
     function  ViewLineText(AViewRow: Integer; ATrimRight: Boolean = True): string;
     function  CellText(const ACell: TTermCell): string;
+    function  GetMouseTracking(): Boolean;
 
     // True for code points in the right-to-left scripts the renderer lays out
     // through the bidi pipeline (Hebrew, Arabic and their presentation forms).
@@ -189,6 +206,11 @@ type
     property AppCursorKeys: Boolean read FAppCursorKeys;
     property AppKeypad: Boolean read FAppKeypad;
     property BracketedPaste: Boolean read FBracketedPaste;
+    property MouseMode: TMouseMode read FMouseMode;
+    property MouseEncoding: TMouseEncoding read FMouseEncoding;
+    // True when the application asked for mouse reports; the view must then
+    // forward clicks instead of starting a text selection.
+    property MouseTracking: Boolean read GetMouseTracking;
     property AltScreen: Boolean read FAltScreen;
     property Title: string read FTitle;
     property ReverseVideo: Boolean read FReverseVideo;
@@ -406,6 +428,8 @@ begin
   FG0Special := False;
   FG1Special := False;
   FShiftOut := False;
+  FMouseMode := tmmNone;
+  FMouseEncoding := tmeX10;
   FUtf8Need := 0;
   FUtf8Have := 0;
   FTitle := '';
@@ -1002,16 +1026,26 @@ begin
         case n of
           1: FAppCursorKeys := True;
           7: FAutoWrap := True;
+          9: FMouseMode := tmmX10;
           25: FCursorVisible := True;
           47, 1047, 1049: EnterAltScreen(n = 1049);
+          1000: FMouseMode := tmmNormal;
+          1001: FMouseMode := tmmNormal;   // highlight tracking: same reports
+          1002: FMouseMode := tmmButtonEvent;
+          1003: FMouseMode := tmmAnyEvent;
+          1005: FMouseEncoding := tmeUtf8;
+          1006: FMouseEncoding := tmeSGR;
+          1015: FMouseEncoding := tmeUrxvt;
           2004: FBracketedPaste := True;
         end;
       'l':
         case n of
           1: FAppCursorKeys := False;
           7: FAutoWrap := False;
+          9, 1000, 1001, 1002, 1003: FMouseMode := tmmNone;
           25: FCursorVisible := False;
           47, 1047, 1049: LeaveAltScreen();
+          1005, 1006, 1015: FMouseEncoding := tmeX10;
           2004: FBracketedPaste := False;
         end;
     end;
@@ -1838,6 +1872,11 @@ begin
   if (idx < 0) or (idx >= Length(FLines)) then Exit;
   if (ACol < 0) or (ACol >= Length(FLines[idx])) then Exit;
   Result := FLines[idx][ACol];
+end;
+
+function TTerminalEmulator.GetMouseTracking(): Boolean;
+begin
+  Result := FMouseMode <> tmmNone;
 end;
 
 class function TTerminalEmulator.IsRtlCodePoint(ACode: LongWord): Boolean;
