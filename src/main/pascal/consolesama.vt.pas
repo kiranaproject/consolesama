@@ -12,6 +12,7 @@ uses
 
 const
   DefaultScrollbackLines = 5000;
+  MaxCombiningMarks = 3;
 
 type
   TTermColorKind = (tckDefault, tckIndexed, tckRGB);
@@ -29,10 +30,15 @@ type
 
   TCellFlag = (cfWideLead, cfWideTail);
 
+  // Combining marks are stored on the cell they decorate so they keep the
+  // same width as their base character. Fixed-size arrays keep TTermCell a
+  // plain-old-data record, which the buffer code relies on (it memmoves cells).
   TTermCell = record
     Code: LongWord;    // Unicode code point; 0 means blank
     Attr: TTermAttr;
     Flags: set of TCellFlag;
+    Comb: array[0..MaxCombiningMarks - 1] of LongWord;
+    CombCount: Byte;
   end;
 
   TTermLine = array of TTermCell;
@@ -109,6 +115,7 @@ type
     function  CursorLine(): TTermLine;
     procedure PutChar(AChar: LongWord);
     procedure PutString(const AText: string);
+    procedure AttachCombining(AChar: LongWord);
     procedure EraseCell(ACellIndex: Integer);
     procedure NewlineWithScroll();
     procedure ReverseIndex();
@@ -187,21 +194,117 @@ uses
 const
   MaxParams = 32;
 
-function CodePointWidth(ACode: LongWord): Integer;
+type
+  TCodeRange = record
+    Lo, Hi: LongWord;
+  end;
+
+const
+  // East Asian Wide (W) and Fullwidth (F) plus emoji presentation ranges,
+  // sorted by Lo so they can be binary searched.
+  WideRanges: array[0..116] of TCodeRange = (
+    (Lo: $1100; Hi: $115F), (Lo: $231A; Hi: $231B), (Lo: $2329; Hi: $232A),
+    (Lo: $23E9; Hi: $23EC), (Lo: $23F0; Hi: $23F0), (Lo: $23F3; Hi: $23F3),
+    (Lo: $25FD; Hi: $25FE), (Lo: $2614; Hi: $2615), (Lo: $2648; Hi: $2653),
+    (Lo: $267F; Hi: $267F), (Lo: $2693; Hi: $2693), (Lo: $26A1; Hi: $26A1),
+    (Lo: $26AA; Hi: $26AB), (Lo: $26BD; Hi: $26BE), (Lo: $26C4; Hi: $26C5),
+    (Lo: $26CE; Hi: $26CE), (Lo: $26D4; Hi: $26D4), (Lo: $26EA; Hi: $26EA),
+    (Lo: $26F2; Hi: $26F3), (Lo: $26F5; Hi: $26F5), (Lo: $26FA; Hi: $26FA),
+    (Lo: $26FD; Hi: $26FD), (Lo: $2705; Hi: $2705), (Lo: $270A; Hi: $270B),
+    (Lo: $2728; Hi: $2728), (Lo: $274C; Hi: $274C), (Lo: $274E; Hi: $274E),
+    (Lo: $2753; Hi: $2755), (Lo: $2757; Hi: $2757), (Lo: $2795; Hi: $2797),
+    (Lo: $27B0; Hi: $27B0), (Lo: $27BF; Hi: $27BF), (Lo: $2B1B; Hi: $2B1C),
+    (Lo: $2B50; Hi: $2B50), (Lo: $2B55; Hi: $2B55), (Lo: $2E80; Hi: $2E99),
+    (Lo: $2E9B; Hi: $2EF3), (Lo: $2F00; Hi: $2FD5), (Lo: $2FF0; Hi: $2FFB),
+    (Lo: $3000; Hi: $303E), (Lo: $3041; Hi: $3096), (Lo: $3099; Hi: $30FF),
+    (Lo: $3105; Hi: $312F), (Lo: $3131; Hi: $318E), (Lo: $3190; Hi: $31E3),
+    (Lo: $31F0; Hi: $321E), (Lo: $3220; Hi: $3247), (Lo: $3250; Hi: $4DBF),
+    (Lo: $4E00; Hi: $A48C), (Lo: $A490; Hi: $A4C6), (Lo: $A960; Hi: $A97C),
+    (Lo: $AC00; Hi: $D7A3), (Lo: $F900; Hi: $FAFF), (Lo: $FE10; Hi: $FE19),
+    (Lo: $FE30; Hi: $FE52), (Lo: $FE54; Hi: $FE66), (Lo: $FE68; Hi: $FE6B),
+    (Lo: $FF01; Hi: $FF60), (Lo: $FFE0; Hi: $FFE6), (Lo: $16FE0; Hi: $16FE4),
+    (Lo: $16FF0; Hi: $16FF1), (Lo: $17000; Hi: $187F7), (Lo: $18800; Hi: $18CD5),
+    (Lo: $18D00; Hi: $18D08), (Lo: $1B000; Hi: $1B122), (Lo: $1B132; Hi: $1B132),
+    (Lo: $1B150; Hi: $1B152), (Lo: $1B155; Hi: $1B155), (Lo: $1B164; Hi: $1B167),
+    (Lo: $1B170; Hi: $1B2FB), (Lo: $1F004; Hi: $1F004), (Lo: $1F0CF; Hi: $1F0CF),
+    (Lo: $1F18E; Hi: $1F18E), (Lo: $1F191; Hi: $1F19A), (Lo: $1F200; Hi: $1F202),
+    (Lo: $1F210; Hi: $1F23B), (Lo: $1F240; Hi: $1F248), (Lo: $1F250; Hi: $1F251),
+    (Lo: $1F260; Hi: $1F265), (Lo: $1F300; Hi: $1F320), (Lo: $1F32D; Hi: $1F335),
+    (Lo: $1F337; Hi: $1F37C), (Lo: $1F37E; Hi: $1F393), (Lo: $1F3A0; Hi: $1F3CA),
+    (Lo: $1F3CF; Hi: $1F3D3), (Lo: $1F3E0; Hi: $1F3F0), (Lo: $1F3F4; Hi: $1F3F4),
+    (Lo: $1F3F8; Hi: $1F43E), (Lo: $1F440; Hi: $1F440), (Lo: $1F442; Hi: $1F4FC),
+    (Lo: $1F4FF; Hi: $1F53D), (Lo: $1F54B; Hi: $1F54E), (Lo: $1F550; Hi: $1F567),
+    (Lo: $1F57A; Hi: $1F57A), (Lo: $1F595; Hi: $1F596), (Lo: $1F5A4; Hi: $1F5A4),
+    (Lo: $1F5FB; Hi: $1F64F), (Lo: $1F680; Hi: $1F6C5), (Lo: $1F6CC; Hi: $1F6CC),
+    (Lo: $1F6D0; Hi: $1F6D2), (Lo: $1F6D5; Hi: $1F6D7), (Lo: $1F6DC; Hi: $1F6DF),
+    (Lo: $1F6EB; Hi: $1F6EC), (Lo: $1F6F4; Hi: $1F6FC), (Lo: $1F7E0; Hi: $1F7EB),
+    (Lo: $1F90C; Hi: $1F93A), (Lo: $1F93C; Hi: $1F945), (Lo: $1F947; Hi: $1F9FF),
+    (Lo: $1FA70; Hi: $1FA7C), (Lo: $1FA80; Hi: $1FA88), (Lo: $1FA90; Hi: $1FABD),
+    (Lo: $1FABF; Hi: $1FAC5), (Lo: $1FACE; Hi: $1FADB), (Lo: $1FAE0; Hi: $1FAE8),
+    (Lo: $1FAF0; Hi: $1FAF8), (Lo: $20000; Hi: $2FFFD), (Lo: $30000; Hi: $3FFFD)
+  );
+
+function IsZeroWidth(ACode: LongWord): Boolean;
 begin
-  // Common East Asian wide and emoji ranges.
-  if (ACode >= $1100) and (ACode <= $115F) then Exit(2);
-  if (ACode >= $2E80) and (ACode <= $A4CF) then Exit(2);
-  if (ACode >= $A960) and (ACode <= $A97F) then Exit(2);
-  if (ACode >= $AC00) and (ACode <= $D7A3) then Exit(2);
-  if (ACode >= $F900) and (ACode <= $FAFF) then Exit(2);
-  if (ACode >= $FE10) and (ACode <= $FE19) then Exit(2);
-  if (ACode >= $FE30) and (ACode <= $FE6F) then Exit(2);
-  if (ACode >= $FF00) and (ACode <= $FF60) then Exit(2);
-  if (ACode >= $FFE0) and (ACode <= $FFE6) then Exit(2);
-  if (ACode >= $1F300) and (ACode <= $1F64F) then Exit(2);
-  if (ACode >= $1F900) and (ACode <= $1F9FF) then Exit(2);
-  if (ACode >= $20000) and (ACode <= $3FFFD) then Exit(2);
+  Result :=
+    ((ACode >= $0300) and (ACode <= $036F)) or   // combining diacritics
+    ((ACode >= $0483) and (ACode <= $0489)) or
+    ((ACode >= $0591) and (ACode <= $05BD)) or
+    (ACode = $05BF) or
+    ((ACode >= $05C1) and (ACode <= $05C2)) or
+    ((ACode >= $05C4) and (ACode <= $05C5)) or
+    ((ACode >= $0610) and (ACode <= $061A)) or
+    ((ACode >= $064B) and (ACode <= $065F)) or
+    (ACode = $0670) or
+    ((ACode >= $06D6) and (ACode <= $06DC)) or
+    ((ACode >= $06DF) and (ACode <= $06E4)) or
+    ((ACode >= $06E7) and (ACode <= $06E8)) or
+    ((ACode >= $06EA) and (ACode <= $06ED)) or
+    ((ACode >= $0711) and (ACode <= $0711)) or
+    ((ACode >= $0730) and (ACode <= $074A)) or
+    ((ACode >= $07A6) and (ACode <= $07B0)) or
+    ((ACode >= $0900) and (ACode <= $0902)) or
+    (ACode = $093A) or
+    (ACode = $093C) or
+    ((ACode >= $0941) and (ACode <= $0948)) or
+    ((ACode >= $094D) and (ACode <= $094D)) or
+    ((ACode >= $0951) and (ACode <= $0957)) or
+    ((ACode >= $0962) and (ACode <= $0963)) or
+    ((ACode >= $0E31) and (ACode <= $0E31)) or
+    ((ACode >= $0E34) and (ACode <= $0E3A)) or
+    ((ACode >= $0E47) and (ACode <= $0E4E)) or
+    ((ACode >= $1AB0) and (ACode <= $1AFF)) or
+    ((ACode >= $1DC0) and (ACode <= $1DFF)) or
+    ((ACode >= $20D0) and (ACode <= $20F0)) or
+    ((ACode >= $FE00) and (ACode <= $FE0F)) or   // variation selectors
+    ((ACode >= $FE20) and (ACode <= $FE2F)) or
+    (ACode = $200B) or (ACode = $200C) or (ACode = $200D) or
+    (ACode = $2060) or
+    ((ACode >= $FEFF) and (ACode <= $FEFF)) or
+    ((ACode >= $1F3FB) and (ACode <= $1F3FF)) or  // emoji skin tones
+    ((ACode >= $E0100) and (ACode <= $E01EF));
+end;
+
+function CodePointWidth(ACode: LongWord): Integer;
+var
+  lo, hi, mid: Integer;
+begin
+  // Zero width: combining marks, joiners and variation selectors.
+  if IsZeroWidth(ACode) then Exit(0);
+
+  // East Asian Wide / Fullwidth ranges (Unicode 15), including emoji.
+  lo := 0;
+  hi := High(WideRanges);
+  while lo <= hi do
+  begin
+    mid := (lo + hi) div 2;
+    if ACode < WideRanges[mid].Lo then
+      hi := mid - 1
+    else if ACode > WideRanges[mid].Hi then
+      lo := mid + 1
+    else
+      Exit(2);
+  end;
   Result := 1;
 end;
 
@@ -339,6 +442,7 @@ begin
     ALine[i].Code := 0;
     ALine[i].Attr := FPen;
     ALine[i].Flags := [];
+    ALine[i].CombCount := 0;
     ALine[i].Attr.FG.Kind := tckDefault;
     ALine[i].Attr.FG.Value := 0;
     ALine[i].Attr.Bold := False;
@@ -518,6 +622,7 @@ begin
     line[ACellIndex].Code := 0;
     line[ACellIndex].Attr := FPen;
     line[ACellIndex].Flags := [];
+    line[ACellIndex].CombCount := 0;
   end;
 end;
 
@@ -543,6 +648,13 @@ begin
   end;
 
   w := CodePointWidth(AChar);
+  if w = 0 then
+  begin
+    // Combining mark: attach it to the preceding cell so the column count
+    // stays the same as the base character.
+    AttachCombining(AChar);
+    Exit;
+  end;
   if w < 1 then w := 1;
 
   line := CursorLine();
@@ -582,7 +694,8 @@ begin
 
   line[x].Code := AChar;
   line[x].Attr := FPen;
-  line[x].Flags := [cfWideLead];
+  line[x].Flags := [];
+  line[x].CombCount := 0;
   if w = 2 then
   begin
     line[x].Flags := [cfWideLead];
@@ -591,6 +704,7 @@ begin
       line[x + 1].Code := 0;
       line[x + 1].Attr := FPen;
       line[x + 1].Flags := [cfWideTail];
+      line[x + 1].CombCount := 0;
     end;
   end;
 
@@ -610,6 +724,43 @@ var
 begin
   for i := 1 to Length(AText) do
     PutChar(Ord(AText[i]));
+end;
+
+// Attach a combining mark to the cell before the cursor, so it keeps the
+// width of its base character instead of consuming a column of its own.
+procedure TTerminalEmulator.AttachCombining(AChar: LongWord);
+var
+  x, row: Integer;
+  line: TTermLine;
+begin
+  x := FCursorX - 1;
+  row := VisibleTop() + FCursorY;
+
+  // Cursor at column 0 means the base character sits at the end of the
+  // previous row (auto-wrap already moved us here).
+  if x < 0 then
+  begin
+    if row <= 0 then Exit;
+    Dec(row);
+    line := FLines[row];
+    if Length(line) = 0 then Exit;
+    x := Length(line) - 1;
+  end
+  else
+  begin
+    line := CursorLine();
+    if (x < Length(line)) and (cfWideTail in line[x].Flags) then
+      Dec(x);
+  end;
+
+  if (x < 0) or (x >= Length(line)) then Exit;
+  if line[x].Code = 0 then Exit;
+  if line[x].CombCount >= MaxCombiningMarks then Exit;
+
+  line[x].Comb[line[x].CombCount] := AChar;
+  Inc(line[x].CombCount);
+  FLines[row] := line;
+  FChanged := True;
 end;
 
 procedure TTerminalEmulator.DoTab();
@@ -1316,7 +1467,14 @@ var
     for k := High(ALine) downto 0 do
     begin
       if ALine[k].Code <> 0 then
-        Exit(k + 1);
+      begin
+        Result := k + 1;
+        // Keep the continuation cell of a wide character so reflow does not
+        // split a two-cell glyph.
+        if (cfWideLead in ALine[k].Flags) and (k + 1 <= High(ALine)) then
+          Inc(Result);
+        Exit;
+      end;
       if ALine[k].Attr.BG.Kind <> tckDefault then
         Exit(k + 1);
     end;
@@ -1600,35 +1758,46 @@ begin
 end;
 
 function TTerminalEmulator.CellText(const ACell: TTermCell): string;
-begin
-  if ACell.Code = 0 then
-    Exit(' ');
-  if ACell.Code < $80 then
-    Result := Chr(ACell.Code)
-  else
+var
+  i: Integer;
+
+  function ToUtf8(ACode: LongWord): string;
   begin
-    if ACell.Code < $800 then
+    if ACode < $80 then
+    begin
+      SetLength(Result, 1);
+      Result[1] := Chr(ACode);
+    end
+    else if ACode < $800 then
     begin
       SetLength(Result, 2);
-      Result[1] := Chr($C0 or (ACell.Code shr 6));
-      Result[2] := Chr($80 or (ACell.Code and $3F));
+      Result[1] := Chr($C0 or (ACode shr 6));
+      Result[2] := Chr($80 or (ACode and $3F));
     end
-    else if ACell.Code < $10000 then
+    else if ACode < $10000 then
     begin
       SetLength(Result, 3);
-      Result[1] := Chr($E0 or (ACell.Code shr 12));
-      Result[2] := Chr($80 or ((ACell.Code shr 6) and $3F));
-      Result[3] := Chr($80 or (ACell.Code and $3F));
+      Result[1] := Chr($E0 or (ACode shr 12));
+      Result[2] := Chr($80 or ((ACode shr 6) and $3F));
+      Result[3] := Chr($80 or (ACode and $3F));
     end
     else
     begin
       SetLength(Result, 4);
-      Result[1] := Chr($F0 or (ACell.Code shr 18));
-      Result[2] := Chr($80 or ((ACell.Code shr 12) and $3F));
-      Result[3] := Chr($80 or ((ACell.Code shr 6) and $3F));
-      Result[4] := Chr($80 or (ACell.Code and $3F));
+      Result[1] := Chr($F0 or (ACode shr 18));
+      Result[2] := Chr($80 or ((ACode shr 12) and $3F));
+      Result[3] := Chr($80 or ((ACode shr 6) and $3F));
+      Result[4] := Chr($80 or (ACode and $3F));
     end;
   end;
+
+begin
+  if ACell.Code = 0 then
+    Exit(' ');
+
+  Result := ToUtf8(ACell.Code);
+  for i := 0 to ACell.CombCount - 1 do
+    Result := Result + ToUtf8(ACell.Comb[i]);
 end;
 
 function TTerminalEmulator.ViewLineText(AViewRow: Integer; ATrimRight: Boolean): string;
@@ -1638,19 +1807,21 @@ var
   lastNonSpace: Integer;
 begin
   Result := '';
-  lastNonSpace := -1;
+  lastNonSpace := 0;
   for c := 0 to FCols - 1 do
   begin
     cell := ViewCell(AViewRow, c);
     if cfWideTail in cell.Flags then
       Continue;
     Result := Result + CellText(cell);
+    // Track a byte offset into Result, not a column: wide and multi-byte
+    // characters make the two differ.
     if (cell.Code <> 0) and (cell.Code <> 32) then
-      lastNonSpace := c;
+      lastNonSpace := Length(Result);
   end;
   if ATrimRight then
   begin
-    SetLength(Result, lastNonSpace + 1);
+    SetLength(Result, lastNonSpace);
     while (Length(Result) > 0) and (Result[Length(Result)] = ' ') do
       Delete(Result, Length(Result), 1);
   end;

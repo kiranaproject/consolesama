@@ -61,6 +61,7 @@ type
     procedure MeasureFont();
     procedure RecomputeGrid();
     function  CellRect(ACol, ARow: Integer): TFtRect;
+    function  CellSpan(const ACell: TTermCell): Integer;
     procedure DrawCell(ACanvas: TFtCanvas; ACol, ARow: Integer; const ACell: TTermCell);
     procedure DrawCursor(ACanvas: TFtCanvas);
     procedure DrawSelection(ACanvas: TFtCanvas);
@@ -385,6 +386,17 @@ begin
   Result.Height := Round(FCellH) + 1;
 end;
 
+// A wide character occupies two cells: the lead cell carries the glyph and
+// the tail cell is a blank continuation. Rectangles for wide leads must span
+// both so backgrounds, underlines and the cursor cover the whole glyph.
+function TConsoleTerminalView.CellSpan(const ACell: TTermCell): Integer;
+begin
+  if cfWideLead in ACell.Flags then
+    Result := 2
+  else
+    Result := 1;
+end;
+
 procedure TConsoleTerminalView.RefreshThemeColors();
 begin
   FIsDark := FtApp().DarkMode;
@@ -453,12 +465,25 @@ var
   fg, bg: TFtColor;
   attr: TTermAttr;
   txt: string;
+  span: Integer;
 begin
   r := CellRect(ACol, ARow);
   attr := ACell.Attr;
+  span := CellSpan(ACell);
+  if span > 1 then
+    r.Width := Round(span * FCellW) + 1;
 
+  // Tail cells hold no glyph, but they still need their background painted so
+  // a wide character's cell is filled completely.
   if cfWideTail in ACell.Flags then
+  begin
+    bg := PaletteColor(attr.BG, True);
+    if attr.Reverse then
+      bg := PaletteColor(attr.FG, True);
+    if (bg.R > 0.001) or (bg.G > 0.001) or (bg.B > 0.001) then
+      ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, bg.R, bg.G, bg.B);
     Exit;
+  end;
 
   fg := PaletteColor(attr.FG, False);
   bg := PaletteColor(attr.BG, True);
@@ -497,6 +522,7 @@ var
   cell: TTermCell;
   fg: TFtColor;
   txt: string;
+  span: Integer;
 begin
   if (not FScreen.CursorVisible) or (not FBlinkOn) then Exit;
   if FScreen.ScrollOffset() <> 0 then Exit;
@@ -505,7 +531,21 @@ begin
   cx := FScreen.CursorX;
   cy := FScreen.CursorY;
   cell := FScreen.ViewCell(cy, cx);
+
+  // Never park the cursor on the trailing half of a wide character.
+  if cfWideTail in cell.Flags then
+  begin
+    if cx > 0 then
+    begin
+      Dec(cx);
+      cell := FScreen.ViewCell(cy, cx);
+    end;
+  end;
+
+  span := CellSpan(cell);
   r := CellRect(cx, cy);
+  if span > 1 then
+    r.Width := Round(span * FCellW) + 1;
 
   if FIsDark then
     ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, 0.55, 0.75, 0.95)

@@ -21,6 +21,8 @@ type
   published
     procedure TestInitAndDefaults();
     procedure TestFeedAsciiText();
+    procedure TestWideCharactersOccupyTwoCells();
+    procedure TestCombiningMarksKeepBaseWidth();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -65,6 +67,71 @@ begin
   AssertEquals('CursorX should advance', 19, FScreen.CursorX);
   AssertEquals('CursorY should stay 0', 0, FScreen.CursorY);
   AssertEquals('Rendered line text', 'Hello, consolesama!', FScreen.ViewLineText(0));
+end;
+
+procedure TVtEmulatorTest.TestWideCharactersOccupyTwoCells();
+begin
+  // Chinese: 4 characters => 8 cells
+  FScreen.Feed('你好世界');
+  AssertEquals('Chinese takes 2 cells each', 8, FScreen.CursorX);
+  AssertEquals('Chinese line text', '你好世界', FScreen.ViewLineText(0));
+
+  FScreen.Feed(#27'[2J'#27'[H');
+  // Japanese hiragana
+  FScreen.Feed('こんにちは');
+  AssertEquals('Hiragana takes 2 cells each', 10, FScreen.CursorX);
+
+  FScreen.Feed(#27'[2J'#27'[H');
+  // Korean hangul
+  FScreen.Feed('안녕');
+  AssertEquals('Hangul takes 2 cells each', 4, FScreen.CursorX);
+
+  FScreen.Feed(#27'[2J'#27'[H');
+  // Emoji (astral plane)
+  FScreen.Feed('🚀🎉');
+  AssertEquals('Emoji takes 2 cells each', 4, FScreen.CursorX);
+
+  FScreen.Feed(#27'[2J'#27'[H');
+  // Fullwidth Latin
+  FScreen.Feed('ＡＢＣ');
+  AssertEquals('Fullwidth latin takes 2 cells each', 6, FScreen.CursorX);
+
+  FScreen.Feed(#27'[2J'#27'[H');
+  // Mixed narrow and wide
+  FScreen.Feed('a中b文c');
+  AssertEquals('Mixed narrow/wide width', 7, FScreen.CursorX);
+  AssertEquals('Mixed line text', 'a中b文c', FScreen.ViewLineText(0));
+
+  FScreen.Feed(#27'[2J'#27'[H');
+  // Single-cell scripts stay one cell per character
+  FScreen.Feed('Привет');
+  AssertEquals('Cyrillic stays narrow', 6, FScreen.CursorX);
+end;
+
+procedure TVtEmulatorTest.TestCombiningMarksKeepBaseWidth();
+var
+  cell: TTermCell;
+begin
+  // e + combining acute accent: two code points, one cell
+  FScreen.Feed('e' + #$CC#$81);
+  AssertEquals('Combining mark does not advance', 1, FScreen.CursorX);
+  cell := FScreen.ViewCell(0, 0);
+  AssertEquals('Base character stored', Ord('e'), Integer(cell.Code));
+  AssertEquals('One combining mark attached', 1, Integer(cell.CombCount));
+  AssertEquals('Cell text keeps the mark', 'e' + #$CC#$81, FScreen.CellText(cell));
+
+  // Two marks on one base still occupy a single cell
+  FScreen.Feed(#27'[2J'#27'[H');
+  FScreen.Feed('e' + #$CC#$82 + #$CC#$81 + 'x');
+  AssertEquals('Two marks then x occupies 2 cells', 2, FScreen.CursorX);
+
+  // Marks must not leak into a cell that is written again
+  FScreen.Feed(#27'[2J'#27'[H');
+  FScreen.Feed('e' + #$CC#$81);
+  FScreen.Feed(#13'x');
+  cell := FScreen.ViewCell(0, 0);
+  AssertEquals('Rewritten cell holds x', Ord('x'), Integer(cell.Code));
+  AssertEquals('Rewritten cell has no stale marks', 0, Integer(cell.CombCount));
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();
