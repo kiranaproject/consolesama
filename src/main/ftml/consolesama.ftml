@@ -67,6 +67,7 @@ Container {
     anchors.bottom: parent.bottom;
     height: 24;
     padding: 0;
+    visible: false;
 
     Text {
       id: statusText;

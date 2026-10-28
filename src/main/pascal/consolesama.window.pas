@@ -186,9 +186,9 @@ begin
   if w is TFtLabel then
     FStatusRight := TFtLabel(w);
 
-  // The status bar is a developer aid: hidden unless --debug was passed.
-  if (FStatusBar <> nil) and (not FDebugMode) then
-    FStatusBar.Hide();
+  // The status bar is a developer aid: shown only when --debug was passed.
+  if FStatusBar <> nil then
+    FStatusBar.Visible := FDebugMode;
 
   if FNotebook = nil then
   begin
@@ -374,9 +374,11 @@ var
 begin
   if FNotebook = nil then Exit;
 
-  // Without the debug status bar the notebook claims the space down to the
-  // window's bottom edge.
-  if not FDebugMode then
+  // The notebook adapts its bottom edge based on status bar visibility.
+  if (FStatusBar <> nil) and FStatusBar.Visible then
+    FNotebook.SetBounds(FNotebook.X, FNotebook.Y, FNotebook.Width,
+      FStatusBar.Y - FNotebook.Y)
+  else
     FNotebook.SetBounds(FNotebook.X, FNotebook.Y, FNotebook.Width,
       Height - FNotebook.Y);
 

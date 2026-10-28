@@ -127,6 +127,24 @@ begin
     st.Y >= sb.Y);
   AssertTrue('Status text bottom is within status bar: st.bottom=' + IntToStr(st.Y + st.Height) + ', sb.bottom=' + IntToStr(sb.Y + sb.Height),
     (st.Y + st.Height) <= (sb.Y + sb.Height));
+
+  // When status bar is hidden, notebook claims the space down to the window's bottom
+  AssertEquals('Notebook claims space to bottom when status bar hidden',
+    FWindow.Height - FWindow.Notebook.Y, FWindow.Notebook.Height);
+
+  // When status bar becomes visible, notebook stops above the status bar
+  sb.Visible := True;
+  FWindow.SetBounds(0, 0, FWindow.Width, FWindow.Height);
+  AssertTrue('Status bar is visible', sb.Visible);
+  AssertEquals('Notebook stops above status bar when visible',
+    sb.Y - FWindow.Notebook.Y, FWindow.Notebook.Height);
+
+  // When status bar is hidden again, notebook re-expands
+  sb.Visible := False;
+  FWindow.SetBounds(0, 0, FWindow.Width, FWindow.Height);
+  AssertFalse('Status bar is hidden again', sb.Visible);
+  AssertEquals('Notebook re-claims space to bottom',
+    FWindow.Height - FWindow.Notebook.Y, FWindow.Notebook.Height);
 end;
 
 procedure TConsoleWindowTest.TestMainMenuPositionOnResize();
