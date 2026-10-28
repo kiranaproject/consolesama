@@ -72,6 +72,7 @@ end;
 procedure TConsoleWindowTest.TestTabManagement();
 begin
   AssertEquals('Initial tab count', 1, FWindow.Notebook.PageCount);
+  AssertEquals('Notebook MaxTabWidth is 220.0', 220.0, FWindow.Notebook.MaxTabWidth);
 end;
 
 procedure TConsoleWindowTest.TestTerminalFontConfiguration();

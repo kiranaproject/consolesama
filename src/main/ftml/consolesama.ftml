@@ -58,6 +58,7 @@ Container {
     anchors.left: parent.left;
     anchors.right: parent.right;
     anchors.bottom: statusBar.top;
+    maxTabWidth: 220;
   }
 
   Panel {
