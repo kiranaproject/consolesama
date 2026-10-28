@@ -28,6 +28,7 @@ type
     procedure TestBlockElementWidth();
     procedure TestBoxDrawingCodePoints();
     procedure TestPrivateCsiIsNotSgr();
+    procedure TestFractionalBoxDrawingCodePoints();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -277,6 +278,32 @@ begin
   FScreen.Feed('z');
   cell := FScreen.ViewCell(0, 0);
   AssertTrue('SGR 4 enables underline', cell.Attr.Underline);
+end;
+
+procedure TVtEmulatorTest.TestFractionalBoxDrawingCodePoints();
+var
+  cell: TTermCell;
+  cp: LongWord;
+  codes: array[0..11] of LongWord =
+    ($2574, $2575, $2576, $2577, $2578, $2579, $257A, $257B, $257C, $257D, $257E, $257F);
+  i: Integer;
+begin
+  // Fractional stubs (opencode ends its prompt bar with U+2579) must survive
+  // the VT layer as single-width cells so the renderer can draw them.
+  for i := Low(codes) to High(codes) do
+  begin
+    cp := codes[i];
+    FScreen.Feed(#27'[2J'#27'[H');
+    if cp < $800 then
+      FScreen.Feed(Chr($C0 or (cp shr 6)) + Chr($80 or (cp and $3F)))
+    else
+      FScreen.Feed(Chr($E0 or (cp shr 12)) +
+        Chr($80 or ((cp shr 6) and $3F)) +
+        Chr($80 or (cp and $3F)));
+    cell := FScreen.ViewCell(0, 0);
+    AssertEquals(Format('U+%.4x stored', [cp]), cp, cell.Code);
+    AssertEquals(Format('U+%.4x is one cell', [cp]), 1, FScreen.CursorX);
+  end;
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();

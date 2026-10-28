@@ -764,6 +764,23 @@ begin
         DoubleH(cy);
         DoubleV(cx);
       end;
+    // ---- fractional lines ----
+    // Light/heavy stubs that run from the cell edge partway to the opposite
+    // edge. opencode ends its prompt bar with U+2579 (up 1/8); drawn by the
+    // font it stopped short of the cell, leaving the bar looking ragged.
+    $2574: HStroke(x0, cx, cy - LightW div 2, LightW);                    // ╴ left 1/4
+    $2575: VStroke(cx - LightW div 2, y0, cy, LightW);                    // ╵ up 1/4
+    $2576: HStroke(cx, x1, cy - LightW div 2, LightW);                    // ╶ right 1/4
+    $2577: VStroke(cx - LightW div 2, cy, y1, LightW);                    // ╷ down 1/4
+    $2578: HStroke(x0, cx, cy - HeavyW div 2, HeavyW);                    // ╸ left 1/4 heavy
+    $2579: VStroke(cx - HeavyW div 2, y0, cy, HeavyW);                    // ╹ up 1/4 heavy
+    $257A: HStroke(cx, x1, cy - HeavyW div 2, HeavyW);                    // ╺ right 1/4 heavy
+    $257B: VStroke(cx - HeavyW div 2, cy, y1, HeavyW);                    // ╻ down 1/4 heavy
+    // The eighths variants: a stub from the edge to 1/8 into the cell.
+    $257C: HStroke(x0, x0 + ARect.Width div 8, cy - LightW div 2, LightW);
+    $257D: VStroke(cx - LightW div 2, y0, y0 + ARect.Height div 8, LightW);
+    $257E: HStroke(x1 - ARect.Width div 8, x1, cy - LightW div 2, LightW);
+    $257F: VStroke(cx - LightW div 2, y1 - ARect.Height div 8, y1, LightW);
   else
     Result := False;
   end;
