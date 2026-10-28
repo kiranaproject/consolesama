@@ -755,6 +755,8 @@ begin
   begin
     if Assigned(FOnExit) then
       FOnExit(Self);
+    // The owner may close this tab (and free this view) in response.
+    Exit;
   end;
 
   if FScreen.Title <> FLastTitle then

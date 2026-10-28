@@ -37,12 +37,16 @@ type
     FLastStatus: QWord;
     FClosing: Boolean;
     FDebugMode: Boolean;
+    FInPump: Boolean;
+    FPendingCloses: TList;
+    FReconciling: Boolean;
 
     procedure SetupUI();
     procedure DumpLayout(const ATag: string);
     procedure HookMenu(const AId: string; AHandler: TNotifyEvent);
-    function  AddTerminalTab(): TConsoleTab;
     procedure CloseTab(AIndex: Integer);
+    procedure FlushPendingCloses();
+    function  IndexOfTerminal(ATerminal: TConsoleTerminalView): Integer;
     procedure LayoutTabs();
     procedure UpdateStatus();
     procedure UpdateTitle();
@@ -75,8 +79,10 @@ type
     destructor Destroy(); override;
 
     procedure PumpTicks();
+    function  AddTerminalTab(): TConsoleTab;
     function  ActiveTab(): TConsoleTab;
     function  ActiveTerminal(): TConsoleTerminalView;
+    procedure ReconcileTabs();
     property Notebook: TFtNotebook read FNotebook;
     property DebugMode: Boolean read FDebugMode;
   end;
@@ -139,6 +145,8 @@ begin
   FLastPump := 0;
   FLastStatus := 0;
   FClosing := False;
+  FInPump := False;
+  FPendingCloses := TList.Create();
   GDebugMode := ADebugMode;
   GCurrentWindow := Self;
 
@@ -160,6 +168,8 @@ begin
     ft_set_tick_callback(nil, nil);
   if GCurrentWindow = Self then
     GCurrentWindow := nil;
+  if FPendingCloses <> nil then
+    FreeAndNil(FPendingCloses);
   if FTabs <> nil then
   begin
     for i := 0 to FTabs.Count - 1 do
@@ -278,6 +288,7 @@ var
   tab: TConsoleTab;
   availW, availH, termW, pageX, pageY: Integer;
 begin
+  ReconcileTabs();
   Inc(FTabCounter);
 
   page := FNotebook.AddTab(Format('Terminal %d', [FTabCounter]), True);
@@ -322,10 +333,102 @@ begin
   Result := tab;
 end;
 
+function TConsoleSamaWindow.IndexOfTerminal(ATerminal: TConsoleTerminalView): Integer;
+var
+  i: Integer;
+begin
+  Result := -1;
+  if (ATerminal = nil) or (FTabs = nil) then Exit;
+  for i := 0 to FTabs.Count - 1 do
+    if TConsoleTab(FTabs[i]).View = ATerminal then
+      Exit(i);
+end;
+
+// A terminal can report its shell exiting from inside its own Pump() call.
+// Freeing the view there would pull the object out from under the running
+// method, so the close is queued and executed once the pump loop is done.
+procedure TConsoleSamaWindow.FlushPendingCloses();
+var
+  view: TConsoleTerminalView;
+  idx: Integer;
+begin
+  if FPendingCloses = nil then Exit;
+  while FPendingCloses.Count > 0 do
+  begin
+    view := TConsoleTerminalView(FPendingCloses[0]);
+    FPendingCloses.Delete(0);
+    idx := IndexOfTerminal(view);
+    if idx >= 0 then
+      CloseTab(idx);
+  end;
+end;
+
+// The notebook's own tab close button destroys the page (and the terminal
+// inside it) without telling the application. Drop any tab whose native page
+// is gone so later layout/pump passes never touch freed widgets.
+procedure TConsoleSamaWindow.ReconcileTabs();
+var
+  i: Integer;
+  tab: TConsoleTab;
+  changed: Boolean;
+begin
+  if FReconciling or (FNotebook = nil) or (FTabs = nil) then Exit;
+  FReconciling := True;
+  try
+    changed := False;
+    i := 0;
+    while i < FTabs.Count do
+    begin
+      tab := TConsoleTab(FTabs[i]);
+      if (tab.Page = nil) or (tab.Page.Handle = nil) then
+      begin
+        if tab.ScrollBar <> nil then
+        begin
+          tab.ScrollBar.Visible := False;
+          FreeAndNil(tab.ScrollBar);
+        end;
+        if tab.View <> nil then
+        begin
+          tab.View.Visible := False;
+          FreeAndNil(tab.View);
+        end;
+        tab.Page.Free();
+        tab.Page := nil;
+        FTabs.Delete(i);
+        tab.Free();
+        changed := True;
+      end
+      else
+        Inc(i);
+    end;
+
+    if not changed then Exit;
+
+    if FTabs.Count = 0 then
+    begin
+      if not FClosing then
+      begin
+        FClosing := True;
+        Close();
+      end;
+      Exit;
+    end;
+    FActiveIndex := FNotebook.ActiveIndex;
+    if (FActiveIndex < 0) or (FActiveIndex >= FTabs.Count) then
+      FActiveIndex := FTabs.Count - 1;
+    FNotebook.ActiveIndex := FActiveIndex;
+    FocusActive();
+    UpdateStatus();
+  finally
+    FReconciling := False;
+  end;
+end;
+
 procedure TConsoleSamaWindow.CloseTab(AIndex: Integer);
 var
   tab: TConsoleTab;
 begin
+  ReconcileTabs();
   if (AIndex < 0) or (AIndex >= FTabs.Count) then Exit;
   tab := TConsoleTab(FTabs[AIndex]);
 
@@ -373,6 +476,7 @@ var
   tab: TConsoleTab;
 begin
   if FNotebook = nil then Exit;
+  ReconcileTabs();
 
   // The notebook adapts its bottom edge based on status bar visibility.
   if (FStatusBar <> nil) and FStatusBar.Visible then
@@ -432,6 +536,7 @@ end;
 procedure TConsoleSamaWindow.HandleTabChange(Sender: TFtNotebook;
   ANewIndex, AOldIndex: Integer);
 begin
+  ReconcileTabs();
   if (ANewIndex >= 0) and (ANewIndex < FTabs.Count) then
   begin
     FActiveIndex := ANewIndex;
@@ -446,12 +551,21 @@ var
   i: Integer;
   tab: TConsoleTab;
 begin
-  for i := 0 to FTabs.Count - 1 do
-  begin
-    tab := TConsoleTab(FTabs[i]);
-    if tab.View <> nil then
-      tab.View.Pump();
+  if FTabs = nil then Exit;
+  ReconcileTabs();
+  FInPump := True;
+  try
+    for i := 0 to FTabs.Count - 1 do
+    begin
+      if i >= FTabs.Count then Break;
+      tab := TConsoleTab(FTabs[i]);
+      if tab.View <> nil then
+        tab.View.Pump();
+    end;
+  finally
+    FInPump := False;
   end;
+  FlushPendingCloses();
 end;
 
 procedure TConsoleSamaWindow.PumpTicks();
@@ -547,6 +661,15 @@ var
   tab: TConsoleTab;
 begin
   if FClosing then Exit;
+
+  // Defer while a Pump() is on the stack: the sender is the view being pumped.
+  if FInPump then
+  begin
+    if FPendingCloses.IndexOf(Sender) < 0 then
+      FPendingCloses.Add(Sender);
+    Exit;
+  end;
+
   for i := 0 to FTabs.Count - 1 do
   begin
     tab := TConsoleTab(FTabs[i]);

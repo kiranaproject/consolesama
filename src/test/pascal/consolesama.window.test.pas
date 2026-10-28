@@ -33,6 +33,7 @@ type
     procedure TestTerminalScrollBarLifecycle();
     procedure TestWindowResizePreservesOutputAndReflow();
     procedure TestOddEvenColumnWidthReflowNoCursorShift();
+    procedure TestNotebookCloseButtonThenNewTab();
   end;
 
 implementation
@@ -421,6 +422,45 @@ begin
   AssertEquals('TermCols at w74 second time', 74, tab.View.TermCols);
   AssertEquals('Cursor row at 74 cols second time', 0, tab.View.Screen.CursorY);
   AssertEquals('Cursor col at 74 cols second time', 73, tab.View.Screen.CursorX);
+end;
+
+// The notebook's own tab close button frees the page and the terminal inside
+// it without notifying the application. Reopening a tab afterwards used to
+// walk into that freed state and segfault.
+procedure TConsoleWindowTest.TestNotebookCloseButtonThenNewTab();
+var
+  first, second: TConsoleTab;
+begin
+  AssertEquals('Starts with one tab', 1, FWindow.Notebook.PageCount);
+
+  second := FWindow.AddTerminalTab();
+  AssertNotNull('Second tab created', second);
+  AssertEquals('Two tabs after adding', 2, FWindow.Notebook.PageCount);
+
+  // This is exactly what the tab strip's close button does internally.
+  WriteLn(StdErr, 'TRACE before RemoveTab');
+  FWindow.Notebook.RemoveTab(1);
+  WriteLn(StdErr, 'TRACE after RemoveTab');
+  FWindow.ReconcileTabs();
+  WriteLn(StdErr, 'TRACE after ReconcileTabs');
+  AssertEquals('Application tracks one tab after the page was freed',
+    1, FWindow.Notebook.PageCount);
+
+  // Reopening must not touch the freed page or terminal.
+  WriteLn(StdErr, 'TRACE before reopen');
+  FWindow.AddTerminalTab();
+  WriteLn(StdErr, 'TRACE after reopen');
+  AssertEquals('Tab reopened', 2, FWindow.Notebook.PageCount);
+
+  // And the window keeps working: layout + pump pass over both tabs.
+  FWindow.SetBounds(0, 0, 1000, 620);
+  FWindow.PumpTicks();
+
+  first := FWindow.ActiveTab();
+  AssertNotNull('Active tab still valid', first);
+  AssertNotNull('Active view still valid', first.View);
+  AssertNotNull('Active page still valid', first.Page);
+  AssertTrue('Active page has a live handle', first.Page.Handle <> nil);
 end;
 
 initialization
