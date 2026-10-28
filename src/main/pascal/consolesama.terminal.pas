@@ -148,6 +148,12 @@ var
   GDefaultBackground: TTermColor;
 
 const
+  // ANSI colours keep their conventional light/dark relationship in both
+  // themes: index 0 is dark, 7 is light and 15 is near-white. Only the default
+  // foreground/background follow the theme. Inverting 7/15 (as an earlier
+  // "readable on white" tweak did) breaks every program that paints with
+  // explicit ANSI colours -- e.g. fp's dialogs use bg 47 / fg 30 and came out
+  // dark-on-grey instead of dark-on-white.
   BasePaletteLight: array[0..15] of LongWord = (
     $001E293B, // 0: Black (Deep Slate)
     $00DC2626, // 1: Red
@@ -156,15 +162,15 @@ const
     $002563EB, // 4: Blue
     $009333EA, // 5: Magenta
     $000891B2, // 6: Cyan
-    $0064748B, // 7: White / Gray (readable on white)
-    $0094A3B8, // 8: Bright Black (Muted Slate)
+    $00CBD5E1, // 7: White / Light Gray
+    $0064748B, // 8: Bright Black (Muted Slate)
     $00EF4444, // 9: Bright Red
     $0022C55E, // 10: Bright Green
     $00F59E0B, // 11: Bright Yellow (Amber 500)
     $003B82F6, // 12: Bright Blue
     $00A855F7, // 13: Bright Magenta
     $0006B6D4, // 14: Bright Cyan
-    $000F172A  // 15: Bright White / Deep Slate
+    $00F8FAFC  // 15: Bright White
   );
 
   BasePaletteDark: array[0..15] of LongWord = (
