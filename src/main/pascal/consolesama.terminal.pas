@@ -10,12 +10,16 @@ interface
 uses
   Classes, SysUtils, Math, Process,
   ftpas, ftpas.types, ftpas.app, ftpas.creative, ftpas.canvas, ftpas.font, ftpas.widget, ftpas.controls,
+  Floria.Unicode.BiDi,
   ConsoleSama.Pty, ConsoleSama.Vt, ConsoleSama.Keys;
 
 const
   DefaultFontFamily = 'Ubuntu Mono';
   DefaultFontSize   = 13;
   DefaultFontDesc   = 'Ubuntu Mono 13';
+  // Extra room below the baseline. Fallback fonts (Arabic, Thai, Devanagari)
+  // draw descenders deeper than the primary monospace font reports.
+  CellBottomPadding = 3;
 
 function  GetDefaultTerminalFont(): string;
 procedure ParseTerminalFontDesc(const ADesc: string; out AFamily: string; out ASize: Integer);
@@ -62,7 +66,14 @@ type
     procedure RecomputeGrid();
     function  CellRect(ACol, ARow: Integer): TFtRect;
     function  CellSpan(const ACell: TTermCell): Integer;
+    procedure DrawCellBackground(ACanvas: TFtCanvas; ACol, ARow: Integer;
+      const ACell: TTermCell);
+    procedure DrawCellGlyph(ACanvas: TFtCanvas; ACol, ARow: Integer;
+      const ACell: TTermCell);
     procedure DrawCell(ACanvas: TFtCanvas; ACol, ARow: Integer; const ACell: TTermCell);
+    function  RowNeedsBidi(ARow: Integer): Boolean;
+    procedure DrawRowBidi(ACanvas: TFtCanvas; ARow: Integer);
+    function  VisualColumnFor(ARow, ALogicalCol: Integer): Integer;
     procedure DrawCursor(ACanvas: TFtCanvas);
     procedure DrawSelection(ACanvas: TFtCanvas);
     function  PaletteColor(const AColor: TTermColor; AIsBackground: Boolean): TFtColor;
@@ -290,6 +301,9 @@ begin
   inherited Destroy();
 end;
 
+type
+  TStringArrayLocal = array of string;
+
 procedure TConsoleTerminalView.MeasureFont();
 var
   asc, desc, h, adv: Double;
@@ -304,7 +318,8 @@ begin
   end;
   FAscent := asc;
   FCellW := Ceil(adv);
-  FCellH := Ceil(h);
+  // Leave room under the baseline for fallback-font descenders.
+  FCellH := Ceil(h) + CellBottomPadding;
   if FCellW < 4 then FCellW := 8;
   if FCellH < 8 then FCellH := 16;
 end;
@@ -458,54 +473,51 @@ begin
   Result.B := (v and $FF) / 255.0;
 end;
 
-procedure TConsoleTerminalView.DrawCell(ACanvas: TFtCanvas; ACol, ARow: Integer;
-  const ACell: TTermCell);
+procedure TConsoleTerminalView.DrawCellBackground(ACanvas: TFtCanvas;
+  ACol, ARow: Integer; const ACell: TTermCell);
 var
   r: TFtRect;
-  fg, bg: TFtColor;
+  bg: TFtColor;
+  span: Integer;
+begin
+  span := CellSpan(ACell);
+  bg := PaletteColor(ACell.Attr.BG, True);
+  if ACell.Attr.Reverse then
+    bg := PaletteColor(ACell.Attr.FG, True);
+  if (bg.R <= 0.001) and (bg.G <= 0.001) and (bg.B <= 0.001) then Exit;
+
+  r := CellRect(ACol, ARow);
+  if span > 1 then
+    r.Width := Round(span * FCellW) + 1;
+  ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, bg.R, bg.G, bg.B);
+end;
+
+procedure TConsoleTerminalView.DrawCellGlyph(ACanvas: TFtCanvas;
+  ACol, ARow: Integer; const ACell: TTermCell);
+var
+  r: TFtRect;
+  fg: TFtColor;
   attr: TTermAttr;
   txt: string;
   span: Integer;
 begin
-  r := CellRect(ACol, ARow);
-  attr := ACell.Attr;
-  span := CellSpan(ACell);
-  if span > 1 then
-    r.Width := Round(span * FCellW) + 1;
-
-  // Tail cells hold no glyph, but they still need their background painted so
-  // a wide character's cell is filled completely.
-  if cfWideTail in ACell.Flags then
-  begin
-    bg := PaletteColor(attr.BG, True);
-    if attr.Reverse then
-      bg := PaletteColor(attr.FG, True);
-    if (bg.R > 0.001) or (bg.G > 0.001) or (bg.B > 0.001) then
-      ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, bg.R, bg.G, bg.B);
-    Exit;
-  end;
-
-  fg := PaletteColor(attr.FG, False);
-  bg := PaletteColor(attr.BG, True);
-  if attr.Reverse then
-  begin
-    fg := PaletteColor(attr.BG, False);
-    bg := PaletteColor(attr.FG, True);
-  end;
-  if attr.Bold then
-  begin
-    if attr.FG.Kind = tckIndexed then
-      fg := PaletteColor(MakeIndexed(attr.FG.Value or 8), False);
-  end;
-
-  // Cell background
-  if (bg.R > 0.001) or (bg.G > 0.001) or (bg.B > 0.001) then
-    ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, bg.R, bg.G, bg.B);
-
+  if cfWideTail in ACell.Flags then Exit;
   if ACell.Code = 0 then Exit;
 
   txt := FScreen.CellText(ACell);
   if txt = '' then Exit;
+
+  attr := ACell.Attr;
+  fg := PaletteColor(attr.FG, False);
+  if attr.Reverse then
+    fg := PaletteColor(attr.BG, False);
+  if attr.Bold and (attr.FG.Kind = tckIndexed) then
+    fg := PaletteColor(MakeIndexed(attr.FG.Value or 8), False);
+
+  span := CellSpan(ACell);
+  r := CellRect(ACol, ARow);
+  if span > 1 then
+    r.Width := Round(span * FCellW) + 1;
 
   ACanvas.DrawText(r.Left, r.Top + FAscent, txt, fg.R, fg.G, fg.B, FFont.Handle);
 
@@ -513,6 +525,179 @@ begin
     ACanvas.DrawRect(r.Left, r.Top + Round(FCellH) - 2, r.Width, 1, fg.R, fg.G, fg.B);
   if attr.Strike then
     ACanvas.DrawRect(r.Left, r.Top + Round(FCellH / 2), r.Width, 1, fg.R, fg.G, fg.B);
+end;
+
+procedure TConsoleTerminalView.DrawCell(ACanvas: TFtCanvas; ACol, ARow: Integer;
+  const ACell: TTermCell);
+begin
+  DrawCellBackground(ACanvas, ACol, ARow, ACell);
+  DrawCellGlyph(ACanvas, ACol, ARow, ACell);
+end;
+
+// True when the row holds right-to-left text, which must be laid out through
+// the bidi pipeline instead of cell by cell.
+function TConsoleTerminalView.RowNeedsBidi(ARow: Integer): Boolean;
+var
+  c: Integer;
+begin
+  Result := False;
+  for c := 0 to FCols - 1 do
+    if FScreen.IsRtlCodePoint(FScreen.ViewCell(ARow, c).Code) then
+      Exit(True);
+end;
+
+// Draw a row containing RTL text: split it into visual runs, then paint each
+// run as one string so the shaper can join Arabic letters. Runs are clipped to
+// their own cells so proportional fallback glyphs cannot bleed into neighbours.
+procedure TConsoleTerminalView.DrawRowBidi(ACanvas: TFtCanvas; ARow: Integer);
+var
+  c, i, k, lastNonBlank, visCol: Integer;
+  cell: TTermCell;
+  logicalText: string;
+  runs: TFloriaBiDiRunArray;
+  logicalChars: TStringArrayLocal;
+  logicalSpan: array of Integer;
+  fg: TFtColor;
+  r: TFtRect;
+  attr: TTermAttr;
+  cellsInRun: Integer;
+begin
+  // Collect the row in logical order, dropping the continuation cells of wide
+  // characters and everything after the last visible character. The span of
+  // each entry is kept so wide characters reserve two columns.
+  SetLength(logicalChars, 0);
+  SetLength(logicalSpan, 0);
+  lastNonBlank := -1;
+  for c := 0 to FCols - 1 do
+  begin
+    cell := FScreen.ViewCell(ARow, c);
+    if cfWideTail in cell.Flags then Continue;
+    SetLength(logicalChars, Length(logicalChars) + 1);
+    SetLength(logicalSpan, Length(logicalSpan) + 1);
+    logicalChars[High(logicalChars)] := FScreen.CellText(cell);
+    logicalSpan[High(logicalSpan)] := CellSpan(cell);
+    if (cell.Code <> 0) and (cell.Code <> 32) then
+      lastNonBlank := High(logicalChars);
+  end;
+  if lastNonBlank < 0 then Exit;
+  SetLength(logicalChars, lastNonBlank + 1);
+  SetLength(logicalSpan, lastNonBlank + 1);
+
+  logicalText := '';
+  for i := 0 to High(logicalChars) do
+    logicalText := logicalText + logicalChars[i];
+
+  runs := TFloriaBiDi.GetVisualRuns(logicalText);
+
+  // Paint each run as a single string: the font can then join the cursive
+  // Arabic forms. Runs are clipped to the cells they own, so a proportional
+  // fallback font cannot bleed into the neighbouring run.
+  visCol := 0;
+  for k := 0 to High(runs) do
+  begin
+    if runs[k].CharCount <= 0 then Continue;
+
+    // Count the grid cells this run covers, honouring wide characters.
+    cellsInRun := 0;
+    for i := runs[k].StartChar to runs[k].StartChar + runs[k].CharCount - 1 do
+      if (i >= 0) and (i <= High(logicalSpan)) then
+        Inc(cellsInRun, logicalSpan[i]);
+    if cellsInRun < 1 then cellsInRun := 1;
+
+    attr := FScreen.ViewCell(ARow, visCol).Attr;
+    fg := PaletteColor(attr.FG, False);
+    if attr.Reverse then
+      fg := PaletteColor(attr.BG, False);
+    if attr.Bold and (attr.FG.Kind = tckIndexed) then
+      fg := PaletteColor(MakeIndexed(attr.FG.Value or 8), False);
+
+    r := CellRect(visCol, ARow);
+    r.Width := Round(cellsInRun * FCellW) + 1;
+    ACanvas.PushClipRect(r.Left, r.Top, r.Width, Round(FCellH));
+    try
+      // Proportional fallback glyphs are narrower than the cell box; start at
+      // the run's first cell so the text lines up with its neighbours.
+      ACanvas.DrawText(r.Left, r.Top + FAscent,
+        runs[k].Text, fg.R, fg.G, fg.B, FFont.Handle);
+    finally
+      ACanvas.PopClipRect();
+    end;
+
+    Inc(visCol, cellsInRun);
+  end;
+end;
+
+// Map a logical column to the column it is painted at. Only rows containing
+// RTL text need this; every other row maps identically.
+function TConsoleTerminalView.VisualColumnFor(ARow, ALogicalCol: Integer): Integer;
+var
+  c, i, logicalIdx, charIdx, lastNonBlank: Integer;
+  cell: TTermCell;
+  logical: string;
+  runs: TFloriaBiDiRunArray;
+  visualCol: Integer;
+  charSpan: array of Integer;
+begin
+  Result := ALogicalCol;
+  if not RowNeedsBidi(ARow) then Exit;
+
+  // Build the logical string and remember the grid width of each character so
+  // column indices can be converted to character indices.
+  logical := '';
+  SetLength(charSpan, 0);
+  lastNonBlank := -1;
+  for c := 0 to FCols - 1 do
+  begin
+    cell := FScreen.ViewCell(ARow, c);
+    if cfWideTail in cell.Flags then Continue;
+    SetLength(charSpan, Length(charSpan) + 1);
+    charSpan[High(charSpan)] := CellSpan(cell);
+    logical := logical + FScreen.CellText(cell);
+    if (cell.Code <> 0) and (cell.Code <> 32) then
+      lastNonBlank := High(charSpan);
+  end;
+  if lastNonBlank < 0 then Exit;
+  SetLength(charSpan, lastNonBlank + 1);
+
+  // Locate the character occupying the requested column.
+  charIdx := -1;
+  c := 0;
+  for i := 0 to High(charSpan) do
+  begin
+    if (ALogicalCol >= c) and (ALogicalCol < c + charSpan[i]) then
+    begin
+      charIdx := i;
+      Break;
+    end;
+    Inc(c, charSpan[i]);
+  end;
+  if charIdx < 0 then Exit;
+
+  runs := TFloriaBiDi.GetVisualRuns(logical);
+  visualCol := 0;
+  for i := 0 to High(runs) do
+  begin
+    if (charIdx >= runs[i].StartChar) and
+       (charIdx < runs[i].StartChar + runs[i].CharCount) then
+    begin
+      logicalIdx := charIdx - runs[i].StartChar;
+      if runs[i].Direction = fbdRTL then
+        logicalIdx := runs[i].CharCount - 1 - logicalIdx;
+      // Advance over the characters painted before this one in the run.
+      for c := 0 to logicalIdx - 1 do
+      begin
+        if runs[i].Direction = fbdRTL then
+          Inc(visualCol, charSpan[runs[i].StartChar + runs[i].CharCount - 1 - c])
+        else
+          Inc(visualCol, charSpan[runs[i].StartChar + c]);
+      end;
+      Result := visualCol;
+      Exit;
+    end;
+    for c := runs[i].StartChar to runs[i].StartChar + runs[i].CharCount - 1 do
+      if (c >= 0) and (c <= High(charSpan)) then
+        Inc(visualCol, charSpan[c]);
+  end;
 end;
 
 procedure TConsoleTerminalView.DrawCursor(ACanvas: TFtCanvas);
@@ -530,6 +715,16 @@ begin
 
   cx := FScreen.CursorX;
   cy := FScreen.CursorY;
+
+  // On an RTL row the cursor's logical column is painted at a different
+  // visual column, so translate before placing the rectangle.
+  if RowNeedsBidi(cy) then
+  begin
+    cx := VisualColumnFor(cy, cx);
+    if cx < 0 then cx := 0;
+    if cx >= FCols then cx := FCols - 1;
+  end;
+
   cell := FScreen.ViewCell(cy, cx);
 
   // Never park the cursor on the trailing half of a wide character.
@@ -630,15 +825,24 @@ begin
   bg := PaletteColor(MakeDefaultColor(), True);
   ACanvas.DrawRect(X, Y, Width, Height, bg.R, bg.G, bg.B);
 
+  // Backgrounds first, glyphs second: a descender that reaches into the row
+  // below must not be painted over by that row's background.
   for py := 0 to FRows - 1 do
-  begin
     for px := 0 to FCols - 1 do
     begin
       cell := FScreen.ViewCell(py, px);
       if (cell.Code = 0) and (cell.Attr.BG.Kind = tckDefault) then
         Continue;
-      DrawCell(ACanvas, px, py, cell);
+      DrawCellBackground(ACanvas, px, py, cell);
     end;
+
+  for py := 0 to FRows - 1 do
+  begin
+    if RowNeedsBidi(py) then
+      DrawRowBidi(ACanvas, py)
+    else
+      for px := 0 to FCols - 1 do
+        DrawCellGlyph(ACanvas, px, py, FScreen.ViewCell(py, px));
   end;
 
   DrawSelection(ACanvas);

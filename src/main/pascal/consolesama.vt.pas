@@ -155,6 +155,10 @@ type
     function  ViewCell(AViewRow, ACol: Integer): TTermCell;
     function  ViewLineText(AViewRow: Integer; ATrimRight: Boolean = True): string;
     function  CellText(const ACell: TTermCell): string;
+
+    // True for code points in the right-to-left scripts the renderer lays out
+    // through the bidi pipeline (Hebrew, Arabic and their presentation forms).
+    class function IsRtlCodePoint(ACode: LongWord): Boolean; static;
     function  SelectedText(ALine1, ACol1, ALine2, ACol2: Integer): string;
 
     function  HistoryCount(): Integer;
@@ -1755,6 +1759,19 @@ begin
   if (idx < 0) or (idx >= Length(FLines)) then Exit;
   if (ACol < 0) or (ACol >= Length(FLines[idx])) then Exit;
   Result := FLines[idx][ACol];
+end;
+
+class function TTerminalEmulator.IsRtlCodePoint(ACode: LongWord): Boolean;
+begin
+  Result :=
+    ((ACode >= $0590) and (ACode <= $05FF)) or   // Hebrew
+    ((ACode >= $0600) and (ACode <= $06FF)) or   // Arabic
+    ((ACode >= $0700) and (ACode <= $074F)) or   // Syriac
+    ((ACode >= $0750) and (ACode <= $077F)) or   // Arabic Supplement
+    ((ACode >= $0780) and (ACode <= $07BF)) or   // Thaana
+    ((ACode >= $07C0) and (ACode <= $08FF)) or   // NKo, Samaritan, Arabic Ext-A
+    ((ACode >= $FB1D) and (ACode <= $FDFF)) or   // Hebrew/Arabic presentation A
+    ((ACode >= $FE70) and (ACode <= $FEFF));     // Arabic presentation B
 end;
 
 function TTerminalEmulator.CellText(const ACell: TTermCell): string;

@@ -23,6 +23,7 @@ type
     procedure TestFeedAsciiText();
     procedure TestWideCharactersOccupyTwoCells();
     procedure TestCombiningMarksKeepBaseWidth();
+    procedure TestRtlCodePointClassification();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -132,6 +133,26 @@ begin
   cell := FScreen.ViewCell(0, 0);
   AssertEquals('Rewritten cell holds x', Ord('x'), Integer(cell.Code));
   AssertEquals('Rewritten cell has no stale marks', 0, Integer(cell.CombCount));
+end;
+
+procedure TVtEmulatorTest.TestRtlCodePointClassification();
+begin
+  // Arabic letters and their presentation forms
+  AssertTrue('Arabic alef is RTL', TTerminalEmulator.IsRtlCodePoint($0627));
+  AssertTrue('Arabic meem is RTL', TTerminalEmulator.IsRtlCodePoint($0645));
+  AssertTrue('Arabic presentation form is RTL', TTerminalEmulator.IsRtlCodePoint($FEE0));
+  // Hebrew
+  AssertTrue('Hebrew alef is RTL', TTerminalEmulator.IsRtlCodePoint($05D0));
+  AssertTrue('Hebrew tav is RTL', TTerminalEmulator.IsRtlCodePoint($05EA));
+  // Everything else used by the terminal stays LTR
+  AssertFalse('Latin is not RTL', TTerminalEmulator.IsRtlCodePoint(Ord('a')));
+  AssertFalse('CJK is not RTL', TTerminalEmulator.IsRtlCodePoint($4E2D));
+  AssertFalse('Cyrillic is not RTL', TTerminalEmulator.IsRtlCodePoint($0410));
+  AssertFalse('Thai is not RTL', TTerminalEmulator.IsRtlCodePoint($0E2A));
+
+  // RTL text still occupies one cell per character
+  FScreen.Feed('مرحبا');
+  AssertEquals('Arabic keeps cell-per-character layout', 5, FScreen.CursorX);
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();
