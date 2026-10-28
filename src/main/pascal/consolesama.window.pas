@@ -86,6 +86,8 @@ procedure SpawnNewConsolesama();
 
 implementation
 
+{$R consolesama.res}
+
 uses
   Math, ftpas.dialogs;
 

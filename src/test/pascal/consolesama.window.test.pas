@@ -10,7 +10,6 @@ interface
 uses
   Classes, SysUtils, Math, fpcunit, testregistry,
   ftpas, ftpas.api, ftpas.types, ftpas.app, ftpas.widget, ftpas.controls, ftpas.layouts, ftpas.font,
-  ConsoleSama.Ftml.Res,
   ConsoleSama.Terminal,
   ConsoleSama.Window;
 

@@ -71,7 +71,7 @@ wait $XEPHYR_PID 2>/dev/null || true
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    consolesama (Samarinda Terminal)                     │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  Declarative FTML Chrome (ConsoleSama.Ftml.Res / consolesama.ftml)      │
+│  Declarative FTML Chrome (consolesama.res / consolesama.ftml)           │
 │  - MenuBar: File, Edit, View, Help with keyboard shortcuts              │
 │  - Notebook tab host (id: tabHost) for multi-tab sessions               │
 │  - StatusBar: shell process PID, terminal dimensions, and status info   │

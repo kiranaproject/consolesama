@@ -7,15 +7,14 @@ cd "$(dirname "$0")"
 FTPAS_DIR="../ftpas"
 
 ensure_ftml() {
-  if [ ! -f src/main/pascal/consolesama.ftml.res.pas ] || [ src/main/ftml/consolesama.ftml -nt src/main/pascal/consolesama.ftml.res.pas ]; then
-    echo "==> Regenerating FTML resource..."
+  if [ ! -f src/main/pascal/consolesama.res ] || [ src/main/ftml/consolesama.ftml -nt src/main/pascal/consolesama.res ]; then
+    echo "==> Regenerating FTML resource (.res)..."
     if [ ! -x target/ftml_embed ] || [ tools/ftml_embed.pas -nt target/ftml_embed ]; then
       mkdir -p target
       fpc -Mobjfpc -Sh -FEtarget tools/ftml_embed.pas >/dev/null
     fi
     target/ftml_embed \
-      --out src/main/pascal/consolesama.ftml.res.pas \
-      --unit ConsoleSama.Ftml.Res \
+      --res src/main/pascal/consolesama.res \
       src/main/ftml/consolesama.ftml
   fi
 }
@@ -42,15 +41,15 @@ case "${TARGET}" in
   clean)
     echo "==> Cleaning target artifacts..."
     shift 1 || true
+    rm -f src/main/pascal/consolesama.res src/main/pascal/consolesama.ftml.res.pas
     pasbuild clean "$@"
     ;;
   ftml)
-    echo "==> Compiling tools/ftml_embed and embedding FTML..."
+    echo "==> Compiling tools/ftml_embed and embedding FTML (.res)..."
     mkdir -p target
     fpc -Mobjfpc -Sh -FEtarget tools/ftml_embed.pas
     target/ftml_embed \
-      --out src/main/pascal/consolesama.ftml.res.pas \
-      --unit ConsoleSama.Ftml.Res \
+      --res src/main/pascal/consolesama.res \
       src/main/ftml/consolesama.ftml
     ;;
   run)

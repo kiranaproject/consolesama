@@ -8,7 +8,6 @@ program consolesama;
 uses
   Classes, SysUtils,
   ftpas, ftpas.app, ftpas.types,
-  ConsoleSama.Ftml.Res,
   ConsoleSama.Window;
 
 var
