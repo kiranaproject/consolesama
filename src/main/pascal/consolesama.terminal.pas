@@ -604,47 +604,66 @@ begin
   end;
 end;
 
-// Box-drawing and block-drawing characters (U+2500..U+257F) rendered as lines
-// and rectangles that span the full cell, so runs join seamlessly.
+// Box-drawing characters (U+2500..U+257F) rendered as lines and rectangles that
+// span the full cell, so runs join seamlessly. Font glyphs stop short of the
+// cell edge by design, which turns a frame into a dotted strip.
 function TConsoleTerminalView.DrawBoxDrawing(ACanvas: TFtCanvas;
   const ARect: TFtRect; ACode: LongWord; const AFg: TFtColor): Boolean;
 const
-  // Line thickness in pixels. Kept at 1 so adjacent cells join exactly.
-  T = 1;
-  // Half-distance between the two strokes of a double line.
-  DOff = 2;
-  // Double strokes are drawn one pixel thicker so they read as solid rules.
-  DT = 2;
+  LightW = 1;   // stroke width for light (single) rules
+  HeavyW = 2;   // stroke width for heavy rules
+  DOff   = 2;   // half-distance between the two strokes of a double line
+  DoubleW = 2;  // stroke width for double lines
+type
+  TArms = set of (armLeft, armRight, armUp, armDown);
 var
-  x0, y0, x1, y1, cx, cy, w, h: Integer;
+  x0, y0, x1, y1, cx, cy: Integer;
+  thick: Integer;    // stroke thickness
+  arms: TArms;
 
-  procedure HLineT(AFromX, AToX, AY, AThick: Integer);
+  // Draw the arms around the centre. A stroke is centred on the cell's middle
+  // and reaches the cell edge, so neighbouring cells line up exactly.
+  // AThick is the stroke thickness, applied to the axis it crosses: horizontal
+  // arms are AThick tall, vertical arms are AThick wide.
+  procedure Paint(AArms: TArms; AThick: Integer);
+  var
+    t: Integer;
   begin
-    if AToX > AFromX then
-      ACanvas.DrawRect(AFromX, AY, AToX - AFromX, AThick, AFg.R, AFg.G, AFg.B);
+    t := AThick;
+    if armLeft in AArms then
+      ACanvas.DrawRect(x0, cy - t div 2, cx + t div 2 - x0, t, AFg.R, AFg.G, AFg.B);
+    if armRight in AArms then
+      ACanvas.DrawRect(cx - t div 2, cy - t div 2, x1 - (cx - t div 2), t, AFg.R, AFg.G, AFg.B);
+    if armUp in AArms then
+      ACanvas.DrawRect(cx - t div 2, y0, t, cy + t div 2 - y0, AFg.R, AFg.G, AFg.B);
+    if armDown in AArms then
+      ACanvas.DrawRect(cx - t div 2, cy - t div 2, t, y1 - (cy - t div 2), AFg.R, AFg.G, AFg.B);
   end;
 
-  procedure VLineT(AX, AFromY, AToY, AThick: Integer);
+  procedure HStroke(AFrom, ATo, AY, AThick: Integer);
   begin
-    if AToY > AFromY then
-      ACanvas.DrawRect(AX, AFromY, AThick, AToY - AFromY, AFg.R, AFg.G, AFg.B);
+    if ATo > AFrom then
+      ACanvas.DrawRect(AFrom, AY, ATo - AFrom, AThick, AFg.R, AFg.G, AFg.B);
   end;
 
-  procedure HLine(AFromX, AToX, AY: Integer);
+  procedure VStroke(AX, AFrom, ATo, AThick: Integer);
   begin
-    HLineT(AFromX, AToX, AY, T);
+    if ATo > AFrom then
+      ACanvas.DrawRect(AX, AFrom, AThick, ATo - AFrom, AFg.R, AFg.G, AFg.B);
   end;
 
-  procedure VLine(AX, AFromY, AToY: Integer);
+  // Double-line strokes at the given offset from the centre.
+  procedure DoubleH(AY: Integer);
   begin
-    VLineT(AX, AFromY, AToY, T);
+    HStroke(x0, x1, AY - DOff, DoubleW);
+    HStroke(x0, x1, AY + DOff, DoubleW);
   end;
 
-  // Arms reach *through* the centre so corners and tees meet without a notch.
-  procedure Left(AY: Integer);  begin HLine(x0, cx + T, AY); end;
-  procedure Right(AY: Integer); begin HLine(cx, x1, AY); end;
-  procedure Up(AX: Integer);    begin VLine(AX, y0, cy + T); end;
-  procedure Down(AX: Integer);  begin VLine(AX, cy, y1); end;
+  procedure DoubleV(AX: Integer);
+  begin
+    VStroke(AX - DOff, y0, y1, DoubleW);
+    VStroke(AX + DOff, y0, y1, DoubleW);
+  end;
 
 begin
   Result := True;
@@ -654,96 +673,103 @@ begin
   y1 := ARect.Top + ARect.Height;
   cx := x0 + ARect.Width div 2;
   cy := y0 + ARect.Height div 2;
-  w := ARect.Width;
-  h := ARect.Height;
+
+  thick := LightW;
+  arms := [];
 
   case ACode of
-    $2500: HLine(x0, x1, cy);                       // ─
-    $2502: VLine(cx, y0, y1);                       // │
-    $250C: begin Up(cx); Right(cy); end;            // ┌
-    $2510: begin Up(cx); Left(cy); end;             // ┐
-    $2514: begin Down(cx); Right(cy); end;          // └
-    $2518: begin Down(cx); Left(cy); end;           // ┘
-    $251C: begin Up(cx); Down(cx); Right(cy); end;  // ├
-    $2524: begin Up(cx); Down(cx); Left(cy); end;   // ┤
-    $252C: begin Left(cy); Right(cy); Down(cx); end;// ┬
-    $2534: begin Left(cy); Right(cy); Up(cx); end;  // ┴
-    $253C: begin Up(cx); Down(cx); Left(cy); Right(cy); end;  // ┼
-    // Double lines. The pair sits at +-DOff so the two strokes are clearly
-    // separated, and each stroke is DT thick so it reads as a solid rule.
-    // Corners keep the outer stroke outermost and the inner stroke inside it,
-    // running in the direction the corner implies: ╔/╗ go down, ╚/╝ go up,
-    // ╔/╚ go right, ╗/╝ go left.
-    $2550: begin                                    // ═
-        HLineT(x0, x1, cy - DOff, DT);
-        HLineT(x0, x1, cy + DOff, DT);
+    // ---- light ----
+    $2500: begin thick := LightW; arms := [armLeft, armRight]; end;          // ─
+    $2502: begin thick := LightW; arms := [armUp, armDown]; end;             // │
+    $250C: arms := [armRight, armDown];                                   // ┌
+    $2510: arms := [armLeft, armDown];                                    // ┐
+    $2514: arms := [armRight, armUp];                                     // └
+    $2518: arms := [armLeft, armUp];                                      // ┘
+    $251C: arms := [armRight, armUp, armDown];                            // ├
+    $2524: arms := [armLeft, armUp, armDown];                             // ┤
+    $252C: arms := [armLeft, armRight, armDown];                          // ┬
+    $2534: arms := [armLeft, armRight, armUp];                            // ┴
+    $253C: arms := [armLeft, armRight, armUp, armDown];                   // ┼
+    // ---- heavy ----
+    $2501: begin thick := HeavyW; arms := [armLeft, armRight]; end;          // ━
+    $2503: begin thick := HeavyW; arms := [armUp, armDown]; end;             // ┃
+    $250F: begin thick := HeavyW; arms := [armRight, armDown]; end;          // ┏
+    $2513: begin thick := HeavyW; arms := [armLeft, armDown]; end;           // ┓
+    $2517: begin thick := HeavyW; arms := [armRight, armUp]; end;            // ┗
+    $251B: begin thick := HeavyW; arms := [armLeft, armUp]; end;             // ┛
+    $2523: begin thick := HeavyW; arms := [armRight, armUp, armDown]; end;   // ┣
+    $252B: begin thick := HeavyW; arms := [armLeft, armUp, armDown]; end;    // ┫
+    $2533: begin thick := HeavyW; arms := [armLeft, armRight, armDown]; end; // ┳
+    $253B: begin thick := HeavyW; arms := [armLeft, armRight, armUp]; end;   // ┻
+    $254B: begin thick := HeavyW; arms := [armLeft, armRight, armUp, armDown]; end;        // ╋
+    // ---- mixed light/heavy ----
+    $2504: begin arms := [armLeft, armRight]; thick := HeavyW; end;          // ┄ (approx)
+    $2505: begin arms := [armLeft, armRight]; thick := HeavyW; end;
+    $2506: begin arms := [armLeft, armRight]; thick := HeavyW; end;
+    $2507: begin arms := [armLeft, armRight]; thick := HeavyW; end;
+    $2508: begin arms := [armLeft, armRight]; thick := HeavyW; end;
+    $2509: begin thick := HeavyW; arms := [armUp, armDown]; end;
+    $250A: begin thick := HeavyW; arms := [armUp, armDown]; end;
+    $250B: begin thick := HeavyW; arms := [armUp, armDown]; end;
+    // ---- double ----
+    $2550: DoubleH(cy);                                                   // ═
+    $2551: DoubleV(cx);                                                   // ║
+    $2554: begin                                                          // ╔
+        HStroke(cx - DOff, x1, cy - DOff, DoubleW);
+        HStroke(cx + DOff, x1, cy + DOff, DoubleW);
+        VStroke(cx - DOff, cy - DOff, y1, DoubleW);
+        VStroke(cx + DOff, cy + DOff, y1, DoubleW);
       end;
-    $2551: begin                                    // ║
-        VLineT(cx - DOff, y0, y1, DT);
-        VLineT(cx + DOff, y0, y1, DT);
+    $2557: begin                                                          // ╗
+        HStroke(x0, cx + DOff + DoubleW, cy - DOff, DoubleW);
+        HStroke(x0, cx - DOff + DoubleW, cy + DOff, DoubleW);
+        VStroke(cx + DOff, cy - DOff, y1, DoubleW);
+        VStroke(cx - DOff, cy + DOff, y1, DoubleW);
       end;
-    $2554: begin                                    // ╔ down + right
-        HLineT(cx - DOff, x1, cy - DOff, DT);
-        HLineT(cx + DOff, x1, cy + DOff, DT);
-        VLineT(cx - DOff, cy - DOff, y1, DT);
-        VLineT(cx + DOff, cy + DOff, y1, DT);
+    $255A: begin                                                          // ╚
+        HStroke(cx - DOff, x1, cy + DOff, DoubleW);
+        HStroke(cx + DOff, x1, cy - DOff, DoubleW);
+        VStroke(cx - DOff, y0, cy + DOff + DoubleW, DoubleW);
+        VStroke(cx + DOff, y0, cy - DOff + DoubleW, DoubleW);
       end;
-    $2557: begin                                    // ╗ down + left
-        HLineT(x0, cx + DOff + DT, cy - DOff, DT);
-        HLineT(x0, cx - DOff + DT, cy + DOff, DT);
-        VLineT(cx + DOff, cy - DOff, y1, DT);
-        VLineT(cx - DOff, cy + DOff, y1, DT);
+    $255D: begin                                                          // ╝
+        HStroke(x0, cx + DOff + DoubleW, cy + DOff, DoubleW);
+        HStroke(x0, cx - DOff + DoubleW, cy - DOff, DoubleW);
+        VStroke(cx + DOff, y0, cy + DOff + DoubleW, DoubleW);
+        VStroke(cx - DOff, y0, cy - DOff + DoubleW, DoubleW);
       end;
-    $255A: begin                                    // ╚ up + right
-        HLineT(cx - DOff, x1, cy + DOff, DT);
-        HLineT(cx + DOff, x1, cy - DOff, DT);
-        VLineT(cx - DOff, y0, cy + DOff + DT, DT);
-        VLineT(cx + DOff, y0, cy - DOff + DT, DT);
+    $2560: begin                                                          // ╠
+        VStroke(cx - DOff, y0, y1, DoubleW);
+        VStroke(cx + DOff, y0, y1, DoubleW);
+        HStroke(cx - DOff, x1, cy - DOff, DoubleW);
+        HStroke(cx + DOff, x1, cy + DOff, DoubleW);
       end;
-    $255D: begin                                    // ╝ up + left
-        HLineT(x0, cx + DOff + DT, cy + DOff, DT);
-        HLineT(x0, cx - DOff + DT, cy - DOff, DT);
-        VLineT(cx + DOff, y0, cy + DOff + DT, DT);
-        VLineT(cx - DOff, y0, cy - DOff + DT, DT);
+    $2563: begin                                                          // ╣
+        VStroke(cx - DOff, y0, y1, DoubleW);
+        VStroke(cx + DOff, y0, y1, DoubleW);
+        HStroke(x0, cx - DOff + DoubleW, cy - DOff, DoubleW);
+        HStroke(x0, cx + DOff + DoubleW, cy + DOff, DoubleW);
       end;
-    $2560: begin                                    // ╠ vertical + right
-        VLineT(cx - DOff, y0, y1, DT);
-        VLineT(cx + DOff, y0, y1, DT);
-        HLineT(cx - DOff, x1, cy - DOff, DT);
-        HLineT(cx + DOff, x1, cy + DOff, DT);
+    $2566: begin                                                          // ╦
+        DoubleH(cy);
+        VStroke(cx - DOff, y0, cy - DOff + DoubleW, DoubleW);
+        VStroke(cx + DOff, y0, cy + DOff + DoubleW, DoubleW);
       end;
-    $2563: begin                                    // ╣ vertical + left
-        VLineT(cx - DOff, y0, y1, DT);
-        VLineT(cx + DOff, y0, y1, DT);
-        HLineT(x0, cx - DOff + DT, cy - DOff, DT);
-        HLineT(x0, cx + DOff + DT, cy + DOff, DT);
+    $2569: begin                                                          // ╩
+        DoubleH(cy);
+        VStroke(cx - DOff, cy - DOff, y1, DoubleW);
+        VStroke(cx + DOff, cy + DOff, y1, DoubleW);
       end;
-    $2566: begin                                    // ╦ down + horizontal
-        HLineT(x0, x1, cy - DOff, DT);
-        HLineT(x0, x1, cy + DOff, DT);
-        VLineT(cx - DOff, y0, cy - DOff + DT, DT);
-        VLineT(cx + DOff, y0, cy + DOff + DT, DT);
+    $256C: begin                                                          // ╬
+        DoubleH(cy);
+        DoubleV(cx);
       end;
-    $2569: begin                                    // ╩ up + horizontal
-        HLineT(x0, x1, cy - DOff, DT);
-        HLineT(x0, x1, cy + DOff, DT);
-        VLineT(cx - DOff, cy - DOff, y1, DT);
-        VLineT(cx + DOff, cy + DOff, y1, DT);
-      end;
-    $256C: begin                                    // ╬
-        HLineT(x0, x1, cy - DOff, DT);
-        HLineT(x0, x1, cy + DOff, DT);
-        VLineT(cx - DOff, y0, y1, DT);
-        VLineT(cx + DOff, y0, y1, DT);
-      end;
-    $2580, $2581, $2582, $2583, $2584, $2585, $2586, $2587,
-    $2588, $2589, $258A, $258B, $258C, $258D, $258E, $258F,
-    $2590, $2591, $2592, $2593, $2594, $2595,
-    $2596, $2597, $2598, $2599, $259A, $259B, $259C, $259D, $259E, $259F:
-      Result := False;  // handled by DrawBlockElement
   else
     Result := False;
   end;
+
+  if Result and (arms <> []) then
+    Paint(arms, thick);
 end;
 
 procedure TConsoleTerminalView.RefreshThemeColors();
@@ -823,7 +849,12 @@ begin
   r := CellRect(ACol, ARow);
   if span > 1 then
     r.Width := Round(span * FCellW) + 1;
-  ACanvas.DrawRect(r.Left, r.Top, r.Width, r.Height, bg.R, bg.G, bg.B);
+  // Overlap the neighbouring cells by one pixel. The canvas rasteriser does
+  // not guarantee that two abutting rectangles cover the shared edge, and a
+  // single uncovered row shows the window background through the grid as a
+  // horizontal hairline. The next cell's fill overwrites the overlap, so the
+  // colour at the boundary still comes from the correct cell.
+  ACanvas.DrawRect(r.Left, r.Top, r.Width + 1, r.Height + 1, bg.R, bg.G, bg.B);
 end;
 
 procedure TConsoleTerminalView.DrawCellGlyph(ACanvas: TFtCanvas;

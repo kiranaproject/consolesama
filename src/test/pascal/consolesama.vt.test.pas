@@ -27,6 +27,7 @@ type
     procedure TestDecSpecialGraphicsCharset();
     procedure TestBlockElementWidth();
     procedure TestBoxDrawingCodePoints();
+    procedure TestPrivateCsiIsNotSgr();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -247,6 +248,35 @@ begin
   cell := FScreen.ViewCell(0, 0);
   AssertEquals('U+25A0 stored', $25A0, Integer(cell.Code));
   AssertEquals('U+25A0 is single width', 1, FScreen.CursorX);
+end;
+
+procedure TVtEmulatorTest.TestPrivateCsiIsNotSgr();
+var
+  cell: TTermCell;
+begin
+  // ESC [ > 4 ; 1 m is XTMODKEYS (keyboard modifier reporting), not SGR.
+  // Treating it as SGR switched on underline+bold and painted a hairline under
+  // every cell, which showed up as stripes across the whole screen.
+  FScreen.Feed(#27'[>4;1m');
+  FScreen.Feed('x');
+  cell := FScreen.ViewCell(0, 0);
+  AssertFalse('XTMODKEYS does not enable underline', cell.Attr.Underline);
+  AssertFalse('XTMODKEYS does not enable bold', cell.Attr.Bold);
+  AssertEquals('Cell still holds the character', Ord('x'), Integer(cell.Code));
+
+  // Other private markers must not be interpreted as SGR either.
+  FScreen.Feed(#27'[2J'#27'[H');
+  FScreen.Feed(#27'[<1;2;3M');
+  FScreen.Feed('y');
+  cell := FScreen.ViewCell(0, 0);
+  AssertFalse('ESC[< does not enable underline', cell.Attr.Underline);
+
+  // Real SGR still works.
+  FScreen.Feed(#27'[2J'#27'[H');
+  FScreen.Feed(#27'[4m');
+  FScreen.Feed('z');
+  cell := FScreen.ViewCell(0, 0);
+  AssertTrue('SGR 4 enables underline', cell.Attr.Underline);
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();

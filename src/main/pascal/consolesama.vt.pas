@@ -986,6 +986,13 @@ var
   n, m, top, bot, y, x: Integer;
   line: TTermLine;
 begin
+  // '>' '<' '=' introduce non-standard sequences (XTMODKEYS, XTQMODKEYS,
+  // keypad mode). They are not SGR or cursor commands, so ignore them whole.
+  // Treating ESC[>4;1m as SGR used to switch on underline, which painted a
+  // hairline under every cell (opencode enables it at startup).
+  if (FPrivate = '>') or (FPrivate = '<') or (FPrivate = '=') then
+    Exit;
+
   if FPrivate = '?' then
   begin
     // DEC Private Mode Set/Reset
