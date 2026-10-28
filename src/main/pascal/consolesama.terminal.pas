@@ -73,6 +73,10 @@ type
     // leaves gaps, which shreds images built from them (e.g. the fp logo).
     function  DrawBlockElement(ACanvas: TFtCanvas; const ARect: TFtRect;
       ACode: LongWord; const AFg: TFtColor): Boolean;
+    // Box-drawing characters must meet at cell edges; the font draws them with
+    // its own line metrics, which leaves dashes and gaps. Drawn as geometry.
+    function  DrawBoxDrawing(ACanvas: TFtCanvas; const ARect: TFtRect;
+      ACode: LongWord; const AFg: TFtColor): Boolean;
     procedure DrawCellBackground(ACanvas: TFtCanvas; ACol, ARow: Integer;
       const ACell: TTermCell);
     procedure DrawCellGlyph(ACanvas: TFtCanvas; ACol, ARow: Integer;
@@ -467,7 +471,7 @@ end;
 function TConsoleTerminalView.DrawBlockElement(ACanvas: TFtCanvas;
   const ARect: TFtRect; ACode: LongWord; const AFg: TFtColor): Boolean;
 var
-  bx, by, bw, bh: Integer;
+  bx, by, bw, bh, sz, ox, oy: Integer;
 
   // Fractions are resolved to *edges* rather than offsets plus sizes.
   // Computing "offset = bh*4 div 8, height = bh*4 div 8" loses the odd pixel
@@ -477,6 +481,12 @@ var
   function Edge(const ASize, ANum: Integer): Integer;
   begin
     Result := Round(ASize * ANum / 8.0);
+  end;
+
+  procedure Fill(AX, AY, AW, AH: Integer);
+  begin
+    if (AW <= 0) or (AH <= 0) then Exit;
+    ACanvas.DrawRect(AX, AY, AW, AH, AFg.R, AFg.G, AFg.B);
   end;
 
   procedure FillVSpan(AY, AFrom, ATo: Integer; AAlpha: Double = 1.0);
@@ -573,6 +583,111 @@ begin
         FillH(4, 8, by, bh);
         FillH(0, 4, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
+    // Geometric shapes. The font draws these with its own baseline, which puts
+    // them high in the cell (fp uses U+25A0 as the dialog icon). Centre a square
+    // instead, inset from the cell edges.
+    $25A0: begin  // ■ filled square
+        sz := Min(bw, bh) * 2 div 3;
+        Fill(bx + (bw - sz) div 2, by + (bh - sz) div 2, sz, sz);
+      end;
+    $25A1: begin  // □ hollow square
+        sz := Min(bw, bh) * 2 div 3;
+        ox := bx + (bw - sz) div 2;
+        oy := by + (bh - sz) div 2;
+        Fill(ox, oy, sz, 1);
+        Fill(ox, oy + sz - 1, sz, 1);
+        Fill(ox, oy, 1, sz);
+        Fill(ox + sz - 1, oy, 1, sz);
+      end;
+  else
+    Result := False;
+  end;
+end;
+
+// Box-drawing and block-drawing characters (U+2500..U+257F) rendered as lines
+// and rectangles that span the full cell, so runs join seamlessly.
+function TConsoleTerminalView.DrawBoxDrawing(ACanvas: TFtCanvas;
+  const ARect: TFtRect; ACode: LongWord; const AFg: TFtColor): Boolean;
+const
+  // Line thickness in pixels. Kept at 1 so adjacent cells join exactly.
+  T = 1;
+var
+  x0, y0, x1, y1, cx, cy, w, h: Integer;
+
+  procedure HLine(AFromX, AToX, AY: Integer);
+  begin
+    if AToX > AFromX then
+      ACanvas.DrawRect(AFromX, AY, AToX - AFromX, T, AFg.R, AFg.G, AFg.B);
+  end;
+
+  procedure VLine(AX, AFromY, AToY: Integer);
+  begin
+    if AToY > AFromY then
+      ACanvas.DrawRect(AX, AFromY, T, AToY - AFromY, AFg.R, AFg.G, AFg.B);
+  end;
+
+  // Arms reach *through* the centre so corners and tees meet without a notch.
+  procedure Left(AY: Integer);  begin HLine(x0, cx + T, AY); end;
+  procedure Right(AY: Integer); begin HLine(cx, x1, AY); end;
+  procedure Up(AX: Integer);    begin VLine(AX, y0, cy + T); end;
+  procedure Down(AX: Integer);  begin VLine(AX, cy, y1); end;
+
+begin
+  Result := True;
+  x0 := ARect.Left;
+  y0 := ARect.Top;
+  x1 := ARect.Left + ARect.Width;
+  y1 := ARect.Top + ARect.Height;
+  cx := x0 + ARect.Width div 2;
+  cy := y0 + ARect.Height div 2;
+  w := ARect.Width;
+  h := ARect.Height;
+
+  case ACode of
+    $2500: HLine(x0, x1, cy);                       // ─
+    $2502: VLine(cx, y0, y1);                       // │
+    $250C: begin Up(cx); Right(cy); end;            // ┌
+    $2510: begin Up(cx); Left(cy); end;             // ┐
+    $2514: begin Down(cx); Right(cy); end;          // └
+    $2518: begin Down(cx); Left(cy); end;           // ┘
+    $251C: begin Up(cx); Down(cx); Right(cy); end;  // ├
+    $2524: begin Up(cx); Down(cx); Left(cy); end;   // ┤
+    $252C: begin Left(cy); Right(cy); Down(cx); end;// ┬
+    $2534: begin Left(cy); Right(cy); Up(cx); end;  // ┴
+    $253C: begin Up(cx); Down(cx); Left(cy); Right(cy); end;  // ┼
+    $2550: begin                                    // ═
+        HLine(x0, x1, cy - 1);
+        HLine(x0, x1, cy + 1);
+      end;
+    $2551: begin                                    // ║
+        VLine(cx - 1, y0, y1);
+        VLine(cx + 1, y0, y1);
+      end;
+    $2554: begin                                    // ╔
+        VLine(cx - 1, y0, cy + 1);
+        HLine(cx - 1, x1, cy - 1);
+        HLine(cx + 1, x1, cy + 1);
+      end;
+    $2557: begin                                    // ╗
+        VLine(cx - 1, y0, cy + 1);
+        HLine(x0, cx + 1, cy - 1);
+        HLine(x0, cx - 1, cy + 1);
+      end;
+    $255A: begin                                    // ╚
+        VLine(cx - 1, cy - 1, y1);
+        HLine(cx - 1, x1, cy + 1);
+        HLine(cx + 1, x1, cy - 1);
+      end;
+    $255D: begin                                    // ╝
+        VLine(cx - 1, cy - 1, y1);
+        HLine(x0, cx + 1, cy + 1);
+        HLine(x0, cx - 1, cy - 1);
+      end;
+    $2580, $2581, $2582, $2583, $2584, $2585, $2586, $2587,
+    $2588, $2589, $258A, $258B, $258C, $258D, $258E, $258F,
+    $2590, $2591, $2592, $2593, $2594, $2595,
+    $2596, $2597, $2598, $2599, $259A, $259B, $259C, $259D, $259E, $259F:
+      Result := False;  // handled by DrawBlockElement
   else
     Result := False;
   end;
@@ -685,7 +800,9 @@ begin
   if span > 1 then
     r.Width := Round(span * FCellW) + 1;
 
-  // Block elements are geometry, not glyphs: only exact rectangles tile.
+  // Box drawing and block elements are geometry, not glyphs: only exact
+  // rectangles and full-cell lines tile without seams.
+  if DrawBoxDrawing(ACanvas, r, ACell.Code, fg) then Exit;
   if DrawBlockElement(ACanvas, r, ACell.Code, fg) then Exit;
 
   ACanvas.DrawText(r.Left, TextBaseline(r), txt, fg.R, fg.G, fg.B, FFont.Handle);

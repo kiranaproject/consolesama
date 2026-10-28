@@ -26,6 +26,7 @@ type
     procedure TestRtlCodePointClassification();
     procedure TestDecSpecialGraphicsCharset();
     procedure TestBlockElementWidth();
+    procedure TestBoxDrawingCodePoints();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -222,6 +223,30 @@ begin
     AssertEquals(Format('U+%.4x is one cell', [codes[i]]), 1, FScreen.CursorX);
     AssertFalse(Format('U+%.4x is not wide', [codes[i]]), cfWideLead in cell.Flags);
   end;
+end;
+
+procedure TVtEmulatorTest.TestBoxDrawingCodePoints();
+var
+  cell: TTermCell;
+begin
+  // Box drawing must survive the VT layer intact; the renderer paints them as
+  // geometry so runs join across cell boundaries.
+  FScreen.Feed(#27'[2J'#27'[H');
+  FScreen.Feed(#$E2#$94#$8C);           // U+250C ┌
+  cell := FScreen.ViewCell(0, 0);
+  AssertEquals('U+250C stored', $250C, Integer(cell.Code));
+  AssertEquals('Box drawing is single width', 1, FScreen.CursorX);
+
+  FScreen.Feed(#$E2#$95#$90);           // U+2550 ═
+  cell := FScreen.ViewCell(0, 1);
+  AssertEquals('U+2550 stored', $2550, Integer(cell.Code));
+
+  // Geometric square used by fp as the dialog icon
+  FScreen.Feed(#27'[2J'#27'[H');
+  FScreen.Feed(#$E2#$96#$A0);           // U+25A0 ■
+  cell := FScreen.ViewCell(0, 0);
+  AssertEquals('U+25A0 stored', $25A0, Integer(cell.Code));
+  AssertEquals('U+25A0 is single width', 1, FScreen.CursorX);
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();
