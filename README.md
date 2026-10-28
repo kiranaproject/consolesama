@@ -20,7 +20,7 @@ Combining the declarative elegance of **FTML (Floria Toolkit Markup Language)** 
 
 - **Hybrid Declarative & Native Architecture**:
   - Window chrome (menu bar, tabs notebook, status bar, and anchor layouts) is declaratively described in [`consolesama.ftml`](src/main/ftml/consolesama.ftml) and compiled directly into executable resources via `ftml_embed`.
-  - Terminal panes run as high-performance native `TFtDrawingArea` canvases with direct AggPas vector rendering.
+  - Terminal panes run as high-performance native `TFtDrawingArea` canvases with 2D vector graphics.
 - **Robust VT100 / VT220 / xterm Emulator Core**:
   - Complete ANSI & SGR formatting: bold, dim, italic, underline, reverse video, 16 ANSI colors, 256-color palette, and 24-bit TrueColor RGB.
   - Alternate screen buffer support for full-screen CLI apps (`vim`, `htop`, `less`, `nano`).
@@ -28,7 +28,7 @@ Combining the declarative elegance of **FTML (Floria Toolkit Markup Language)** 
   - Bracketed paste mode and OSC title reporting.
 - **Crisp Monospace Typography**:
   - Monospace font rendering (defaults to `Ubuntu Mono 13`) with HarfBuzz shaping and FreeType/FontConfig integration.
-  - Sub-pixel anti-aliased character drawing powered by AggPas vector engine.
+  - Sub-pixel anti-aliased character drawing powered by the Floria 2D vector canvas.
 - **Interactive Multi-Tab Management**:
   - Open and close tabs with shortcuts (`Ctrl+Shift+T` / `Ctrl+Shift+W`) or UI close buttons.
   - Tab title maximum width constraints (`maxTabWidth: 220;`) and automatic text ellipsis truncation (`...`) for long titles (e.g. deep directory paths).
@@ -62,7 +62,7 @@ flowchart TD
     end
 
     subgraph Graphics ["Rendering & Display"]
-        VT --> Canvas["TFtCanvas / AggPas 2D Engine"]
+        VT --> Canvas["TFtCanvas (Floria Vector Engine)"]
         Canvas --> X11["Native X11 / XCB Server"]
     end
 ```
@@ -97,7 +97,6 @@ flowchart TD
 - **Floria Toolkit Core Libraries**:
   - `florialib:0.0.1-SNAPSHOT`
   - `ftpas:0.0.1-SNAPSHOT`
-  - `aggpas:2.4.0-SNAPSHOT`
 
 ---
 
