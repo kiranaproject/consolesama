@@ -407,12 +407,27 @@ begin
   FScrollBar.Invalidate();
 end;
 
+// Rectangle of one grid cell.
+//
+// The edges are derived from rounded grid positions rather than from a fixed
+// width/height, so consecutive cells share an exact boundary. Using a constant
+// size (Round(FCellH)) while positioning rows at Round(ARow * FCellH) makes the
+// two disagree whenever the pitch is fractional: fills drift by a pixel per row
+// and leave horizontal seams between stacked blocks.
 function TConsoleTerminalView.CellRect(ACol, ARow: Integer): TFtRect;
+var
+  left, right, top, bottom: Integer;
 begin
-  Result.Left := X + Round(ACol * FCellW);
-  Result.Top := Y + Round(ARow * FCellH);
-  Result.Width := Round(FCellW) + 1;
-  Result.Height := Round(FCellH) + 1;
+  left := X + Round(ACol * FCellW);
+  right := X + Round((ACol + 1) * FCellW);
+  top := Y + Round(ARow * FCellH);
+  bottom := Y + Round((ARow + 1) * FCellH);
+  if right <= left then right := left + 1;
+  if bottom <= top then bottom := top + 1;
+  Result.Left := left;
+  Result.Top := top;
+  Result.Width := right - left;
+  Result.Height := bottom - top;
 end;
 
 // A wide character occupies two cells: the lead cell carries the glyph and
@@ -454,71 +469,109 @@ function TConsoleTerminalView.DrawBlockElement(ACanvas: TFtCanvas;
 var
   bx, by, bw, bh: Integer;
 
-  procedure Fill(AX, AY, AW, AH: Integer; AAlpha: Double = 1.0);
+  // Fractions are resolved to *edges* rather than offsets plus sizes.
+  // Computing "offset = bh*4 div 8, height = bh*4 div 8" loses the odd pixel
+  // (21 px cell -> 10 + 10 = 20), which showed up as a one-pixel horizontal
+  // seam between stacked blocks. Deriving both from rounded edges keeps
+  // adjacent fractions exactly contiguous: Edge(8) - Edge(4) + Edge(4) = bh.
+  function Edge(const ASize, ANum: Integer): Integer;
   begin
-    if (AW <= 0) or (AH <= 0) then Exit;
-    ACanvas.DrawRect(AX, AY, AW, AH, AFg.R, AFg.G, AFg.B, AAlpha);
+    Result := Round(ASize * ANum / 8.0);
+  end;
+
+  procedure FillVSpan(AY, AFrom, ATo: Integer; AAlpha: Double = 1.0);
+  var
+    top, bottom: Integer;
+  begin
+    top := by + Edge(bh, AFrom);
+    bottom := by + Edge(bh, ATo);
+    if bottom <= top then Exit;
+    ACanvas.DrawRect(bx, top, bw, bottom - top, AFg.R, AFg.G, AFg.B, AAlpha);
+  end;
+
+  procedure FillH(AFrom, ATo, AY, AH: Integer; AAlpha: Double = 1.0);
+  var
+    left, right: Integer;
+  begin
+    left := bx + Edge(bw, AFrom);
+    right := bx + Edge(bw, ATo);
+    if (right <= left) or (AH <= 0) then Exit;
+    ACanvas.DrawRect(left, AY, right - left, AH, AFg.R, AFg.G, AFg.B, AAlpha);
   end;
 
 begin
   Result := True;
   bx := ARect.Left;
   by := ARect.Top;
-  // Round the cell size once so all fractions land on the same grid and
-  // adjacent blocks share an edge exactly.
-  bw := Round(FCellW);
-  bh := Round(FCellH);
+  // Use the cell's own measured size so fills line up with its edges.
+  bw := ARect.Width;
+  bh := ARect.Height;
 
   case ACode of
-    $2580: Fill(bx, by, bw, bh div 2);                        // upper half
-    $2581: Fill(bx, by + bh * 7 div 8, bw, bh div 8);         // lower 1/8
-    $2582: Fill(bx, by + bh * 6 div 8, bw, bh * 2 div 8);
-    $2583: Fill(bx, by + bh * 5 div 8, bw, bh * 3 div 8);
-    $2584: Fill(bx, by + bh * 4 div 8, bw, bh * 4 div 8);     // lower half
-    $2585: Fill(bx, by + bh * 3 div 8, bw, bh * 5 div 8);
-    $2586: Fill(bx, by + bh * 2 div 8, bw, bh * 6 div 8);
-    $2587: Fill(bx, by + bh * 1 div 8, bw, bh * 7 div 8);
-    $2588: Fill(bx, by, bw, bh);                              // full block
-    $2589: Fill(bx, by, bw * 7 div 8, bh);                    // left 7/8
-    $258A: Fill(bx, by, bw * 6 div 8, bh);
-    $258B: Fill(bx, by, bw * 5 div 8, bh);
-    $258C: Fill(bx, by, bw * 4 div 8, bh);                    // left half
-    $258D: Fill(bx, by, bw * 3 div 8, bh);
-    $258E: Fill(bx, by, bw * 2 div 8, bh);
-    $258F: Fill(bx, by, bw * 1 div 8, bh);
-    $2590: Fill(bx + bw div 2, by, bw div 2, bh);             // right half
-    $2591: Fill(bx, by, bw, bh, 0.25);                        // 25% shade
-    $2592: Fill(bx, by, bw, bh, 0.50);                        // 50% shade
-    $2593: Fill(bx, by, bw, bh, 0.75);                        // 75% shade
-    $2594: Fill(bx, by, bw, bh div 8);                        // upper 1/8
-    $2595: Fill(bx + bw * 7 div 8, by, bw div 8, bh);         // right 1/8
-    $2596: Fill(bx, by + bh div 2, bw div 2, bh div 2);       // lower left
-    $2597: Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);  // lower right
-    $2598: Fill(bx, by, bw div 2, bh div 2);                  // upper left
-    $2599: begin                                              // left + lower right
-        Fill(bx, by, bw div 2, bh);
-        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+    // Lower n/8 blocks
+    $2581: FillVSpan(by, 7, 8);
+    $2582: FillVSpan(by, 6, 8);
+    $2583: FillVSpan(by, 5, 8);
+    $2584: FillVSpan(by, 4, 8);
+    $2585: FillVSpan(by, 3, 8);
+    $2586: FillVSpan(by, 2, 8);
+    $2587: FillVSpan(by, 1, 8);
+    // Upper half and full block
+    $2580: FillVSpan(by, 0, 4);
+    $2588: FillVSpan(by, 0, 8);
+    // Left n/8 blocks
+    $2589: FillH(0, 7, by, bh);
+    $258A: FillH(0, 6, by, bh);
+    $258B: FillH(0, 5, by, bh);
+    $258C: FillH(0, 4, by, bh);
+    $258D: FillH(0, 3, by, bh);
+    $258E: FillH(0, 2, by, bh);
+    $258F: FillH(0, 1, by, bh);
+    // Right half
+    $2590: FillH(4, 8, by, bh);
+    // Shades
+    $2591: FillVSpan(by, 0, 8, 0.25);
+    $2592: FillVSpan(by, 0, 8, 0.50);
+    $2593: FillVSpan(by, 0, 8, 0.75);
+    // Upper 1/8, right 1/8
+    $2594: FillVSpan(by, 0, 1);
+    $2595: FillH(7, 8, by, bh);
+    // Quadrants
+    $2596: begin  // lower left
+        FillH(0, 4, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
-    $259A: begin                                              // upper left + lower right
-        Fill(bx, by, bw div 2, bh div 2);
-        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+    $2597: begin  // lower right
+        FillH(4, 8, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
-    $259B: begin                                              // left + lower right
-        Fill(bx, by, bw div 2, bh);
-        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+    $2598: begin  // upper left
+        FillH(0, 4, by, Edge(bh, 4));
       end;
-    $259C: begin                                              // top half + lower right
-        Fill(bx, by, bw, bh div 2);
-        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+    $2599: begin  // left half + lower right
+        FillH(0, 4, by, bh);
+        FillH(4, 8, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
-    $259D: Fill(bx + bw div 2, by, bw div 2, bh div 2);       // upper right
-    $259E: begin                                              // upper right + lower left
-        Fill(bx + bw div 2, by, bw div 2, bh div 2);
-        Fill(bx, by + bh div 2, bw div 2, bh div 2);
+    $259A: begin  // upper left + lower right
+        FillH(0, 4, by, Edge(bh, 4));
+        FillH(4, 8, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
-    $259F: begin                                              // right half + lower left
-        Fill(bx + bw div 2, by, bw div 2, bh);
-        Fill(bx, by + bh div 2, bw div 2, bh div 2);
+    $259B: begin  // left half + lower right (same shape as 2599)
+        FillH(0, 4, by, bh);
+        FillH(4, 8, by + Edge(bh, 4), bh - Edge(bh, 4));
+      end;
+    $259C: begin  // top half + lower right
+        FillH(0, 8, by, Edge(bh, 4));
+        FillH(4, 8, by + Edge(bh, 4), bh - Edge(bh, 4));
+      end;
+    $259D: begin  // upper right
+        FillH(4, 8, by, Edge(bh, 4));
+      end;
+    $259E: begin  // upper right + lower left
+        FillH(4, 8, by, Edge(bh, 4));
+        FillH(0, 4, by + Edge(bh, 4), bh - Edge(bh, 4));
+      end;
+    $259F: begin  // right half + lower left
+        FillH(4, 8, by, bh);
+        FillH(0, 4, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
   else
     Result := False;
