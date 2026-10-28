@@ -81,6 +81,13 @@ type
     FReverseVideo: Boolean;
     FTabStops: array of Boolean;
 
+    // Character set designation. TUI programs (notably the Free Pascal IDE)
+    // switch to DEC Special Graphics to draw boxes and then emit the ASCII
+    // range $60..$7E, which must be translated to line-drawing glyphs.
+    FG0Special: Boolean;   // G0 designated as DEC Special Graphics
+    FG1Special: Boolean;   // G1 designated as DEC Special Graphics
+    FShiftOut: Boolean;    // SO active: G1 is in use instead of G0
+
     FState: (stGround, stEscape, stCsi, stOsc, stOscEsc, stString, stStringEsc);
     FParams: array[0..31] of Integer;
     FParamCount: Integer;
@@ -115,6 +122,7 @@ type
     function  CursorLine(): TTermLine;
     procedure PutChar(AChar: LongWord);
     procedure PutString(const AText: string);
+    function  TranslateCharset(AChar: LongWord): LongWord;
     procedure AttachCombining(AChar: LongWord);
     procedure EraseCell(ACellIndex: Integer);
     procedure NewlineWithScroll();
@@ -395,6 +403,9 @@ begin
   FPrivate := #0;
   FIntermediates := '';
   FOSCBuf := '';
+  FG0Special := False;
+  FG1Special := False;
+  FShiftOut := False;
   FUtf8Need := 0;
   FUtf8Have := 0;
   FTitle := '';
@@ -630,6 +641,56 @@ begin
   end;
 end;
 
+// DEC Special Graphics: the ASCII range is remapped to line drawing and
+// symbols. Used by TUI programs that draw boxes with ESC ( 0.
+function TTerminalEmulator.TranslateCharset(AChar: LongWord): LongWord;
+var
+  special: Boolean;
+begin
+  special := FG1Special;
+  if not FShiftOut then
+    special := FG0Special;
+  if not special then
+    Exit(AChar);
+
+  case AChar of
+    $5F: Result := $00A0;  // blank
+    $60: Result := $25C6;  // ◆
+    $61: Result := $2592;  // ▒
+    $62: Result := $2409;  // ␉
+    $63: Result := $240C;  // ␌
+    $64: Result := $240D;  // ␍
+    $65: Result := $240A;  // ␊
+    $66: Result := $00B0;  // °
+    $67: Result := $00B1;  // ±
+    $68: Result := $2424;  // ␤
+    $69: Result := $240B;  // ␋
+    $6A: Result := $2518;  // ┘
+    $6B: Result := $2510;  // ┐
+    $6C: Result := $250C;  // ┌
+    $6D: Result := $2514;  // └
+    $6E: Result := $253C;  // ┼
+    $6F: Result := $23BA;  // ⎺
+    $70: Result := $23BB;  // ⎻
+    $71: Result := $2500;  // ─
+    $72: Result := $23BC;  // ⎼
+    $73: Result := $23BD;  // ⎽
+    $74: Result := $251C;  // ├
+    $75: Result := $2524;  // ┤
+    $76: Result := $2534;  // ┴
+    $77: Result := $252C;  // ┬
+    $78: Result := $2502;  // │
+    $79: Result := $2264;  // ≤
+    $7A: Result := $2265;  // ≥
+    $7B: Result := $03C0;  // π
+    $7C: Result := $2260;  // ≠
+    $7D: Result := $00A3;  // £
+    $7E: Result := $00B7;  // ·
+  else
+    Result := AChar;
+  end;
+end;
+
 procedure TTerminalEmulator.PutChar(AChar: LongWord);
 var
   line: TTermLine;
@@ -650,6 +711,8 @@ begin
     end;
     FWrapPending := False;
   end;
+
+  AChar := TranslateCharset(AChar);
 
   w := CodePointWidth(AChar);
   if w = 0 then
@@ -1164,8 +1227,8 @@ begin
         FCursorX := 0;
         FWrapPending := False;
       end;
-    $0E: ; // SO
-    $0F: ; // SI
+    $0E: FShiftOut := True;   // SO — select G1
+    $0F: FShiftOut := False;  // SI — select G0
   end;
 end;
 
@@ -1334,7 +1397,16 @@ begin
           FIntermediates := Chr(AByte)
         else if FIntermediates <> '' then
         begin
-          // Character set designation: ignore
+          // Character set designation: ESC ( X selects G0, ESC ) X selects G1.
+          // '0' is DEC Special Graphics; 'B' (and anything else) is ASCII.
+          if (FIntermediates = '(') or (FIntermediates = ')') or
+             (FIntermediates = '*') or (FIntermediates = '+') then
+          begin
+            if (FIntermediates = '(') or (FIntermediates = '*') then
+              FG0Special := (AByte = Ord('0'))
+            else
+              FG1Special := (AByte = Ord('0'));
+          end;
           FState := stGround;
           FIntermediates := '';
         end

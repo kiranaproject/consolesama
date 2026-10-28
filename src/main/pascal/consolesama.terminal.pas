@@ -69,6 +69,10 @@ type
     function  CellSpan(const ACell: TTermCell): Integer;
     // Baseline that centres the painted glyphs inside a cell.
     function  TextBaseline(const ARect: TFtRect): Double;
+    // Block elements must tile the cell exactly; drawing them as font glyphs
+    // leaves gaps, which shreds images built from them (e.g. the fp logo).
+    function  DrawBlockElement(ACanvas: TFtCanvas; const ARect: TFtRect;
+      ACode: LongWord; const AFg: TFtColor): Boolean;
     procedure DrawCellBackground(ACanvas: TFtCanvas; ACol, ARow: Integer;
       const ACell: TTermCell);
     procedure DrawCellGlyph(ACanvas: TFtCanvas; ACol, ARow: Integer;
@@ -435,6 +439,86 @@ begin
   Result := ARect.Top + (ARect.Height - inkHeight) / 2.0 + inkAscent;
 end;
 
+// Renders U+2580..U+259F as filled rectangles so neighbouring blocks touch.
+// Drawing them as font glyphs leaves hairline gaps between cells, which shreds
+// any image built out of them (the Free Pascal IDE logo is one).
+// Returns False when the code point is not a block element.
+function TConsoleTerminalView.DrawBlockElement(ACanvas: TFtCanvas;
+  const ARect: TFtRect; ACode: LongWord; const AFg: TFtColor): Boolean;
+var
+  bx, by, bw, bh: Integer;
+
+  procedure Fill(AX, AY, AW, AH: Integer; AAlpha: Double = 1.0);
+  begin
+    if (AW <= 0) or (AH <= 0) then Exit;
+    ACanvas.DrawRect(AX, AY, AW, AH, AFg.R, AFg.G, AFg.B, AAlpha);
+  end;
+
+begin
+  Result := True;
+  bx := ARect.Left;
+  by := ARect.Top;
+  // Round the cell size once so all fractions land on the same grid and
+  // adjacent blocks share an edge exactly.
+  bw := Round(FCellW);
+  bh := Round(FCellH);
+
+  case ACode of
+    $2580: Fill(bx, by, bw, bh div 2);                        // upper half
+    $2581: Fill(bx, by + bh * 7 div 8, bw, bh div 8);         // lower 1/8
+    $2582: Fill(bx, by + bh * 6 div 8, bw, bh * 2 div 8);
+    $2583: Fill(bx, by + bh * 5 div 8, bw, bh * 3 div 8);
+    $2584: Fill(bx, by + bh * 4 div 8, bw, bh * 4 div 8);     // lower half
+    $2585: Fill(bx, by + bh * 3 div 8, bw, bh * 5 div 8);
+    $2586: Fill(bx, by + bh * 2 div 8, bw, bh * 6 div 8);
+    $2587: Fill(bx, by + bh * 1 div 8, bw, bh * 7 div 8);
+    $2588: Fill(bx, by, bw, bh);                              // full block
+    $2589: Fill(bx, by, bw * 7 div 8, bh);                    // left 7/8
+    $258A: Fill(bx, by, bw * 6 div 8, bh);
+    $258B: Fill(bx, by, bw * 5 div 8, bh);
+    $258C: Fill(bx, by, bw * 4 div 8, bh);                    // left half
+    $258D: Fill(bx, by, bw * 3 div 8, bh);
+    $258E: Fill(bx, by, bw * 2 div 8, bh);
+    $258F: Fill(bx, by, bw * 1 div 8, bh);
+    $2590: Fill(bx + bw div 2, by, bw div 2, bh);             // right half
+    $2591: Fill(bx, by, bw, bh, 0.25);                        // 25% shade
+    $2592: Fill(bx, by, bw, bh, 0.50);                        // 50% shade
+    $2593: Fill(bx, by, bw, bh, 0.75);                        // 75% shade
+    $2594: Fill(bx, by, bw, bh div 8);                        // upper 1/8
+    $2595: Fill(bx + bw * 7 div 8, by, bw div 8, bh);         // right 1/8
+    $2596: Fill(bx, by + bh div 2, bw div 2, bh div 2);       // lower left
+    $2597: Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);  // lower right
+    $2598: Fill(bx, by, bw div 2, bh div 2);                  // upper left
+    $2599: begin                                              // left + lower right
+        Fill(bx, by, bw div 2, bh);
+        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+      end;
+    $259A: begin                                              // upper left + lower right
+        Fill(bx, by, bw div 2, bh div 2);
+        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+      end;
+    $259B: begin                                              // left + lower right
+        Fill(bx, by, bw div 2, bh);
+        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+      end;
+    $259C: begin                                              // top half + lower right
+        Fill(bx, by, bw, bh div 2);
+        Fill(bx + bw div 2, by + bh div 2, bw div 2, bh div 2);
+      end;
+    $259D: Fill(bx + bw div 2, by, bw div 2, bh div 2);       // upper right
+    $259E: begin                                              // upper right + lower left
+        Fill(bx + bw div 2, by, bw div 2, bh div 2);
+        Fill(bx, by + bh div 2, bw div 2, bh div 2);
+      end;
+    $259F: begin                                              // right half + lower left
+        Fill(bx + bw div 2, by, bw div 2, bh);
+        Fill(bx, by + bh div 2, bw div 2, bh div 2);
+      end;
+  else
+    Result := False;
+  end;
+end;
+
 procedure TConsoleTerminalView.RefreshThemeColors();
 begin
   FIsDark := FtApp().DarkMode;
@@ -541,6 +625,9 @@ begin
   r := CellRect(ACol, ARow);
   if span > 1 then
     r.Width := Round(span * FCellW) + 1;
+
+  // Block elements are geometry, not glyphs: only exact rectangles tile.
+  if DrawBlockElement(ACanvas, r, ACell.Code, fg) then Exit;
 
   ACanvas.DrawText(r.Left, TextBaseline(r), txt, fg.R, fg.G, fg.B, FFont.Handle);
 

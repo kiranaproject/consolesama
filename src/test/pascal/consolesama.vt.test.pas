@@ -24,6 +24,8 @@ type
     procedure TestWideCharactersOccupyTwoCells();
     procedure TestCombiningMarksKeepBaseWidth();
     procedure TestRtlCodePointClassification();
+    procedure TestDecSpecialGraphicsCharset();
+    procedure TestBlockElementWidth();
     procedure TestCursorMovement();
     procedure TestAutoWrap();
     procedure TestSgrFormatting();
@@ -153,6 +155,73 @@ begin
   // RTL text still occupies one cell per character
   FScreen.Feed('مرحبا');
   AssertEquals('Arabic keeps cell-per-character layout', 5, FScreen.CursorX);
+end;
+
+procedure TVtEmulatorTest.TestDecSpecialGraphicsCharset();
+var
+  cell: TTermCell;
+begin
+  // ESC ( 0 selects DEC Special Graphics for G0: ASCII letters become
+  // line-drawing glyphs. TUI programs (the Free Pascal IDE, ncurses apps)
+  // rely on this to draw boxes.
+  FScreen.Feed(#27'(0');
+  FScreen.Feed('l');            // upper left corner
+  cell := FScreen.ViewCell(0, 0);
+  AssertEquals('DEC l maps to box drawing corner', $250C, Integer(cell.Code));
+
+  FScreen.Feed('q');            // horizontal line
+  cell := FScreen.ViewCell(0, 1);
+  AssertEquals('DEC q maps to horizontal line', $2500, Integer(cell.Code));
+
+  FScreen.Feed('x');            // vertical line
+  cell := FScreen.ViewCell(0, 2);
+  AssertEquals('DEC x maps to vertical line', $2502, Integer(cell.Code));
+
+  // Back to ASCII
+  FScreen.Feed(#27'(B');
+  FScreen.Feed('l');
+  cell := FScreen.ViewCell(0, 3);
+  AssertEquals('ESC ( B restores ASCII', Ord('l'), Integer(cell.Code));
+
+  // Shift Out / Shift In select G1 and back
+  FScreen.Feed(#27')0');
+  FScreen.Feed(#14);            // SO -> G1 (special)
+  FScreen.Feed('q');
+  cell := FScreen.ViewCell(0, 4);
+  AssertEquals('SO selects G1 special graphics', $2500, Integer(cell.Code));
+  FScreen.Feed(#15);            // SI -> G0 (ASCII)
+  FScreen.Feed('q');
+  cell := FScreen.ViewCell(0, 5);
+  AssertEquals('SI returns to G0 ASCII', Ord('q'), Integer(cell.Code));
+
+  // Width stays one cell per character
+  AssertEquals('Special graphics stay single width', 6, FScreen.CursorX);
+end;
+
+procedure TVtEmulatorTest.TestBlockElementWidth();
+var
+  codes: array[0..5] of LongWord = ($2580, $2584, $2588, $258C, $2590, $2593);
+  i: Integer;
+  cell: TTermCell;
+begin
+  // Block elements are single-cell glyphs; drawing them as rectangles is what
+  // makes adjacent blocks tile without seams.
+  for i := Low(codes) to High(codes) do
+  begin
+    FScreen.Feed(#27'[1;1H');
+    FScreen.Feed(#27'[2J');
+    // Feed the code point as UTF-8
+    if codes[i] < $800 then
+      FScreen.Feed(Chr($C0 or (codes[i] shr 6)) + Chr($80 or (codes[i] and $3F)))
+    else
+      FScreen.Feed(Chr($E0 or (codes[i] shr 12)) +
+        Chr($80 or ((codes[i] shr 6) and $3F)) +
+        Chr($80 or (codes[i] and $3F)));
+    cell := FScreen.ViewCell(0, 0);
+    AssertEquals(Format('U+%.4x stored', [codes[i]]), codes[i], cell.Code);
+    AssertEquals(Format('U+%.4x is one cell', [codes[i]]), 1, FScreen.CursorX);
+    AssertFalse(Format('U+%.4x is not wide', [codes[i]]), cfWideLead in cell.Flags);
+  end;
 end;
 
 procedure TVtEmulatorTest.TestCursorMovement();
