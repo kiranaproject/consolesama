@@ -20,6 +20,8 @@ const
   // Extra room below the baseline. Fallback fonts (Arabic, Thai, Devanagari)
   // draw descenders deeper than the primary monospace font reports.
   CellBottomPadding = 3;
+  // Cursor blink: visible and hidden phases are equal, like most terminals.
+  CursorBlinkMs = 530;
 
 function  GetDefaultTerminalFont(): string;
 procedure ParseTerminalFontDesc(const ADesc: string; out AFamily: string; out ASize: Integer);
@@ -56,6 +58,9 @@ type
     FOnExit: TTerminalExitEvent;
     FOnShortcut: TTerminalShortcutEvent;
     FBlinkOn: Boolean;
+    // Tick at which the current blink phase started. Reset whenever the user
+    // types or output arrives, so the cursor stays solid while active.
+    FBlinkPhaseTick: QWord;
     FLastPumpTick: QWord;
     FLastTitle: string;
     FDefaultFg: TTermColor;
@@ -1381,6 +1386,7 @@ begin
     FScreen.AppKeypad);
   SendInput(data);
   FBlinkOn := True;
+  FBlinkPhaseTick := GetTickCount64();
   Invalidate();
 end;
 
@@ -1546,6 +1552,7 @@ begin
     begin
       FScreen.Feed(@buf[0], n);
       FBlinkOn := True;
+      FBlinkPhaseTick := GetTickCount64();
     end;
   until n <= 0;
 
@@ -1575,8 +1582,30 @@ begin
 end;
 
 procedure TConsoleTerminalView.Pump();
+var
+  nowTick: QWord;
 begin
   PumpOutput();
+
+  // Blink the cursor while it is idle. Only the focused view repaints, so
+  // background tabs cost nothing.
+  if Focused and FScreen.CursorVisible and (FScreen.ScrollOffset() = 0) then
+  begin
+    nowTick := GetTickCount64();
+    if nowTick - FBlinkPhaseTick >= CursorBlinkMs then
+    begin
+      FBlinkPhaseTick := nowTick;
+      FBlinkOn := not FBlinkOn;
+      Invalidate();
+    end;
+  end
+  else
+  begin
+    // Keep it solid whenever it is not being drawn.
+    if not FBlinkOn then
+      FBlinkOn := True;
+    FBlinkPhaseTick := GetTickCount64();
+  end;
 end;
 
 procedure TConsoleTerminalView.StartShell(const AShell: string; const ACwd: string);
