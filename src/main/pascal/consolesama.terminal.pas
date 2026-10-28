@@ -597,14 +597,16 @@ begin
         FillH(0, 4, by + Edge(bh, 4), bh - Edge(bh, 4));
       end;
     // Geometric shapes. The font draws these with its own baseline, which puts
-    // them high in the cell (fp uses U+25A0 as the dialog icon). Centre a square
-    // instead, inset from the cell edges.
+    // them high in the cell, and at roughly half the cell width, so fp's dialog
+    // icon looked like a speck. Draw them at the full cell width like MATE
+    // Terminal does, leaving a hairline inset so the shape stays distinct from
+    // the brackets around it.
     $25A0: begin  // ■ filled square
-        sz := Min(bw, bh) * 2 div 3;
+        sz := Min(bw, bh);
         Fill(bx + (bw - sz) div 2, by + (bh - sz) div 2, sz, sz);
       end;
     $25A1: begin  // □ hollow square
-        sz := Min(bw, bh) * 2 div 3;
+        sz := Min(bw, bh);
         ox := bx + (bw - sz) div 2;
         oy := by + (bh - sz) div 2;
         Fill(ox, oy, sz, 1);
