@@ -609,17 +609,16 @@ end;
 // cell edge by design, which turns a frame into a dotted strip.
 function TConsoleTerminalView.DrawBoxDrawing(ACanvas: TFtCanvas;
   const ARect: TFtRect; ACode: LongWord; const AFg: TFtColor): Boolean;
-const
-  LightW = 1;   // stroke width for light (single) rules
-  HeavyW = 2;   // stroke width for heavy rules
-  DOff   = 2;   // half-distance between the two strokes of a double line
-  DoubleW = 2;  // stroke width for double lines
 type
   TArms = set of (armLeft, armRight, armUp, armDown);
 var
   x0, y0, x1, y1, cx, cy: Integer;
   thick: Integer;    // stroke thickness
   arms: TArms;
+  // Stroke weights scale with the cell so the rules look the same at any font
+  // size. The ratios match MATE Terminal: a light rule is 1/5 of the cell
+  // width (2px at the default 10px advance) and a heavy rule is 2/5 (4px).
+  LightW, HeavyW, DoubleW, DOff: Integer;
 
   // Draw the arms around the centre. A stroke is centred on the cell's middle
   // and reaches the cell edge, so neighbouring cells line up exactly.
@@ -673,6 +672,11 @@ begin
   y1 := ARect.Top + ARect.Height;
   cx := x0 + ARect.Width div 2;
   cy := y0 + ARect.Height div 2;
+
+  LightW := Max(1, Round(ARect.Width / 5));
+  HeavyW := Max(LightW + 1, Round(ARect.Width * 2 / 5));
+  DoubleW := LightW;
+  DOff := LightW;
 
   thick := LightW;
   arms := [];
